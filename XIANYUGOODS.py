@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 简化测试版（只用Cookie）
+# XIANYUGOODS.py - 完整数据版（内置商品所有信息）
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode
 import os
 import random
 import string
@@ -12,7 +12,6 @@ import requests
 import urllib3
 from PIL import Image
 import re
-import mimetypes
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,7 +22,7 @@ UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 固定的Headers（从你之前的请求中提取）====================
+# ==================== 固定的Headers ====================
 FIXED_HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
     "accept": "application/json",
@@ -39,6 +38,69 @@ FIXED_HEADERS = {
     "bx-umidtoken": "S2gAFccM8Ue3klCztyJmE7bRarp39uLDTdDrSiMlewyBfUC1_tjqj4RIi5ZzSTOSo_YdS9PkA1XoQKYpZ09Nu6DDcvFKsvoYPesWNKhdWCdZrh86c98g0bcSFUQxYKk6KTO027G4KUptfdaX2H2eEVzW",
     "x-ticid": "AV4xWPtPBbpHU3c6zyGp06Wcx0vh6CD6TdS4fr-Moyn1gHm_6MN_goRzcYjYaxqxOsNKFUeMprlUAzecNgRmwTxLkCUQ",
     "mini-janus": "10%40%2Fqsjuf84JPeypLnnQ%2FIJ3QSm%2Ffm8RUgaD2GwN9Aqyf8Ld9jP1SXppLDPkEUKp57IuDGIaqlQOPaqiBF%3D",
+}
+
+# ==================== 内置的完整商品数据（从你的请求中提取）====================
+FIXED_ITEM_DATA = {
+    "itemId": "1033424722209",
+    "utdid": FIXED_UTDID,
+    "platform": "windows",
+    "miniAppVersion": "9.9.9",
+    "itemTextDTO": {
+        "title": "哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～",
+        "desc": "哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～",
+        "wlDescription": "哈哈哈哈哈哈哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～"
+    },
+    "itemPriceDTO": {
+        "priceInCent": 150,
+        "origPriceInCent": 200
+    },
+    "itemAddrDTO": {
+        "area": "天长市",
+        "city": "滁州",
+        "poiName": "安徽睿弘环保科技有限公司",
+        "divisionId": "341181",
+        "gps": "32.662261,118.935768",
+        "poiId": "B0GD0A7HZL",
+        "prov": "安徽"
+    },
+    "itemCatDTO": {
+        "catId": "50025452",
+        "catName": "狗狗",
+        "tbCatId": "217309",
+        "channelCatId": "126854713"
+    },
+    "stuffStatus": "9",
+    "quantity": "1",
+    "itemFrom": "wechat",
+    "itemTypeStr": "b",
+    "simpleItem": "true",
+    "canBargain": "true",
+    "supportBargainPrice": "true",
+    "defaultPrice": False,
+    "redirectUrl": "fleamarket://awesome_detail?itemId=1033424722209&hitNativeDetail=true&flutter=true&needNotPreGet=true",
+    "jumpUrl": "fleamarket://awesome_detail?itemId=1033424722209&hitNativeDetail=true&flutter=true&needNotPreGet=true",
+    "itemLabelExtList": [
+        {
+            "channelCateName": "狗狗",
+            "channelCateId": "126854713",
+            "tbCatId": "217309",
+            "labelType": "common",
+            "from": "newPublishChoice",
+            "propertyId": "-10000",
+            "labelFrom": "newPublish",
+            "properties": "-10000##分类:126854713##狗狗",
+            "text": "狗狗"
+        }
+    ],
+    "itemPostFeeDTO": {
+        "canFreeShipping": "false",
+        "onlyTakeSelf": "false",
+        "supportFreight": "false",
+        "idleTemplateId": "0",
+        "templateId": "0",
+        "postPriceInCent": 0
+    }
 }
 
 # 全局session
@@ -186,10 +248,10 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     
     return image_url
 
-# ==================== 直接修改商品图片（使用内置的c参数）====================
+# ==================== 修改商品图片（使用完整内置数据）====================
 
-def edit_item_image_direct(item_id: str, image_url: str) -> dict:
-    """直接修改商品图片 - 使用内置的c参数"""
+def edit_item_image_with_full_data(item_id: str, image_url: str) -> dict:
+    """修改商品图片 - 使用内置的完整商品数据"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -200,17 +262,72 @@ def edit_item_image_direct(item_id: str, image_url: str) -> dict:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 使用从你之前请求中提取的c参数（这个c参数可能已过期，但先试试）
+    # 使用内置的c参数
     c_param = "a7aae20aaaf4c186b06debcc2f7e7854_1774073270430;62452af9c4e6371c500da3b3df1f5913"
     
-    # 构建请求数据
+    # 构建完整的商品数据（复制内置数据并替换图片URL）
+    image_info = {
+        "major": True,
+        "type": 0,
+        "url": image_url,
+        "widthSize": "640",
+        "heightSize": "640"
+    }
+    
+    # 构建完整的请求数据（从内置数据复制所有字段）
     data_obj = {
         "utdid": FIXED_UTDID,
         "platform": "windows",
         "miniAppVersion": "9.9.9",
         "itemId": str(item_id),
-        "imageUrl": image_url,
+        "imageInfoDOList": [image_info],
+        "trendyGroupBuyInfo": {},
+        "canBorrow": "false",
+        "attribute_product": None,
+        "redirectUrl": FIXED_ITEM_DATA["redirectUrl"],
+        "simpleItem": "true",
+        "itemPriceDTO": FIXED_ITEM_DATA["itemPriceDTO"],
+        "itemTimestampDTO": {},
+        "categoryBarDTO": {"url": "https://market.m.taobao.com/app/idleFish-F2e/IdleFish4Weex/CateSecondary?wh_weex=true"},
+        "commonTagList": [],
+        "canBargain": "true",
+        "intellectSpuInfoDTO": {"defaultDes": "关联淘宝同款", "defaultTitle": "宝贝将被多人看到"},
+        "jumpUrl": FIXED_ITEM_DATA["jumpUrl"],
+        "lockCpv": "false",
+        "inputProperties": "",
+        "uniqueCode": int(time.time() * 1000),
+        "bizActivityType": None,
+        "itemStatus": None,
+        "itemTypeStr": "b",
+        "mtopTransformData": "{}",
+        "itemTopicParams": {"topicInfos": []},
+        "attribute_bizActivityType": None,
+        "itemLabelExtList": FIXED_ITEM_DATA["itemLabelExtList"],
+        "itemToBuyDTO": None,
+        "itemAddrDTO": FIXED_ITEM_DATA["itemAddrDTO"],
+        "textLabelList": [],
+        "defaultPrice": False,
+        "trendyFache": {},
+        "userRightsProtocols": [],
+        "quantity": "1",
+        "itemSkuExtra": {},
+        "supportBargainPrice": "true",
+        "defaultPicUrl": "false",
+        "userId": "0",
+        "tags": [],
+        "hideProSwitcher": "false",
+        "freebies": "false",
+        "itemFrom": "wechat",
+        "itemTableMap": {},
+        "itemTextDTO": FIXED_ITEM_DATA["itemTextDTO"],
+        "stuffStatus": "9",
+        "attribute_biz_line": "normalbuynow",
+        "itemPostFeeDTO": FIXED_ITEM_DATA["itemPostFeeDTO"],
+        "itemCatDTO": FIXED_ITEM_DATA["itemCatDTO"],
+        "hideBid": "false",
+        "properties": "15808291:60465429"
     }
+    
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
@@ -304,7 +421,7 @@ def process_uploaded_file(uploaded_file):
 
 # ==================== 主界面 ====================
 def main():
-    st.title("📷 闲鱼商品图片修改工具 - 测试版")
+    st.title("📷 闲鱼商品图片修改工具 - 完整数据版")
     
     # 认证信息配置
     st.header("🔑 认证信息配置")
@@ -340,7 +457,7 @@ def main():
         value="1033424722209"
     )
     
-    st.info("💡 提示：c参数已内置，但可能已过期。如果修改失败，请重新抓取新的c参数。")
+    st.info("💡 提示：商品的其他信息（标题、价格、分类等）已内置，只修改图片URL")
     
     st.divider()
     
@@ -406,9 +523,9 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    # 修改商品图片
+                    # 修改商品图片（使用内置完整数据）
                     st.info("正在修改商品图片...")
-                    result = edit_item_image_direct(item_id, final_url)
+                    result = edit_item_image_with_full_data(item_id, final_url)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
@@ -416,6 +533,9 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
+                        # 显示完整返回供调试
+                        with st.expander("查看详细返回"):
+                            st.json(result)
                         
             except requests.exceptions.Timeout:
                 st.error("❌ 请求超时，请检查网络后重试")
@@ -425,12 +545,11 @@ def main():
     # 底部说明
     st.divider()
     st.caption("💡 使用说明：\n"
-               "1. Cookie已自动填入\n"
-               "2. 点击'解析Cookie'确认有效\n"
-               "3. 输入商品ID\n"
-               "4. 选择新图片\n"
-               "5. 点击开始修改\n\n"
-               "⚠️ 注意：内置的c参数可能已过期，如果修改失败，需要重新抓取新的c参数")
+               "1. Cookie已自动填入，点击解析\n"
+               "2. 输入商品ID\n"
+               "3. 选择新图片\n"
+               "4. 点击开始修改\n\n"
+               "📦 已内置商品数据：标题、价格、分类、地址等（从你之前的请求中提取）")
 
 if __name__ == "__main__":
     main()
