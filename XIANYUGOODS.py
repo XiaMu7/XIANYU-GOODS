@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 最终成功版（基于你成功的编辑请求）
+# XIANYUGOODS.py - 最终版（使用你成功的完整请求）
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode
 import os
 import random
 import string
@@ -21,6 +21,24 @@ APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
+
+# ==================== 从你成功的请求中提取的固定Headers ====================
+FIXED_HEADERS = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
+    "accept": "application/json",
+    "referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+    "origin": "https://servicewechat.com",
+    "x-tap": "wx",
+    "xweb_xhr": "1",
+    "sec-fetch-site": "cross-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    "accept-language": "zh-CN,zh;q=0.9",
+    "priority": "u=1, i",
+    "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
+    "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
+    "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
+}
 
 # 全局session
 session = requests.Session()
@@ -41,8 +59,6 @@ if 'auth_info' not in st.session_state:
         "m_h5_tk": "",
         "token": "",
     }
-if 'current_c_param' not in st.session_state:
-    st.session_state.current_c_param = ""
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
 
@@ -88,78 +104,6 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-# ==================== 获取c参数 ====================
-
-def get_c_param(item_id: str) -> str:
-    """获取新的c参数 - 通过editdetail接口"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    token = st.session_state.auth_info.get("token", "")
-    
-    if not token:
-        if '_' in m_h5_tk:
-            token = m_h5_tk.split('_')[0]
-        else:
-            token = m_h5_tk
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_id),
-    }
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
-    
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str)
-    
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.idle.wx.idleitem.editdetail",
-        "_bx-m": "1",
-    }
-    
-    url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
-        "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
-        "x-tap": "wx",
-        "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
-    }
-    
-    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    # 从redirectUrl中提取c参数
-    if result.get("data") and result["data"].get("redirectUrl"):
-        redirect_url = result["data"]["redirectUrl"]
-        match = re.search(r'c=([^&]+)', redirect_url)
-        if match:
-            return unquote(match.group(1))
-    
-    raise Exception("未能提取c参数")
-
 # ==================== 上传图片 ====================
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
@@ -192,18 +136,9 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     
     body = '\r\n'.join(body_parts).encode() + b'\r\n' + file_bytes + f'\r\n--{boundary}--\r\n'.encode()
     
-    upload_headers = {
-        'Content-Type': f'multipart/form-data; boundary={boundary}',
-        'Accept': '*/*',
-        'Origin': 'https://servicewechat.com',
-        'Referer': 'https://servicewechat.com/wx9882f2a891880616/75/page-frame.html',
-        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
-        'sgcookie': cookies.get('sgcookie', ''),
-        'bx-umidtoken': "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
-        'x-ticid': "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
-        'x-tap': "wx",
-        'mini-janus': "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
-    }
+    upload_headers = FIXED_HEADERS.copy()
+    upload_headers['Content-Type'] = f'multipart/form-data; boundary={boundary}'
+    upload_headers['sgcookie'] = cookies.get('sgcookie', '')
     
     params = {
         'folderId': '0',
@@ -228,8 +163,8 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
 
 # ==================== 修改商品图片 ====================
 
-def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
-    """修改商品图片 - 使用你成功请求的完整格式"""
+def edit_item_image(item_id: str, image_url: str) -> dict:
+    """修改商品图片 - 使用你成功的请求格式"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -252,7 +187,7 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
         "url": image_url
     }
     
-    # 构建请求数据 - 基于你成功的请求格式
+    # 构建请求数据 - 基于你成功的请求
     data_obj = {
         "utdid": FIXED_UTDID,
         "platform": "windows",
@@ -347,8 +282,12 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
+    # 生成新的签名参数
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
+    
+    # 生成新的c参数（使用token和时间戳）
+    c_param = f"{token}_{t};{hashlib.md5(f'{token}_{t}'.encode()).hexdigest()}"
     
     params = {
         "jsv": "2.4.12",
@@ -367,17 +306,9 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     
     url = f"{BASE_URL_EDIT}?{urlencode(params)}"
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
-        "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
-        "x-tap": "wx",
-        "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
-    }
+    headers = FIXED_HEADERS.copy()
+    headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    headers['sgcookie'] = cookies.get('sgcookie', '')
     
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
     
@@ -431,7 +362,7 @@ def main():
         "Cookie",
         height=200,
         placeholder="粘贴完整的Cookie字符串...",
-        value="cookie2=1a1dc873b657af0c33ff47d8c27e7742; cna=OPA7Ivhd/iECAXAaAnFXYRhf; _samesite_flag_=true; t=6d0f3df81668bb7846291186b5a28502; _tb_token_=79bd1113ebe57; tracknick=123%E5%88%98%E5%B0%8F%E5%9D%8F; unb=2886592894; xlly_s=1; sgcookie=E100aNNYp0IDJBysa3MJGiZUbMKaQFO1Y2qwaiOqzPX%2BpHfZ2egKALOm4OvbrvCyrX0ic1Hfq%2FyOzaWT3sUrYC3zD9rAS0%2FP3ciM84EWBTONcHY%3D; csg=6e2a6f6f; mtop_partitioned_detect=1; _m_h5_tk=42ad3a94196e85ca4f7fcb1938a70b36_1774082610841; _m_h5_tk_enc=c3b6dcad0faa6c0c387a917bb3fa190a"
+        value="cookie2=1a1dc873b657af0c33ff47d8c27e7742; cna=OPA7Ivhd/iECAXAaAnFXYRhf; _samesite_flag_=true; t=6d0f3df81668bb7846291186b5a28502; _tb_token_=79bd1113ebe57; tracknick=123%E5%88%98%E5%B0%8F%E5%9D%8F; unb=2886592894; xlly_s=1; mtop_partitioned_detect=1; _m_h5_tk=ec8694d86518d128448f0b819d3f089b_1774091684488; _m_h5_tk_enc=a809f19be94bf748147fc9d411b4db5c; sgcookie=E100tUNLOsTQY33%2FL0jZKmAFrBufJwT6LV4TzgAGk4XXV3aqO6T0GuMdqd6Q37lpv0QJdWmIyqDTU%2Fl4zu1FXv2HhBcoCnx4zSC24RNYRrxRGWw%3D; csg=c712c3e6"
     )
     
     if st.button("解析Cookie", use_container_width=True):
@@ -447,19 +378,6 @@ def main():
     
     st.header("📦 商品信息")
     item_id = st.text_input("商品ID", value="1033424722209")
-    
-    if st.button("获取c参数", use_container_width=True):
-        try:
-            with st.spinner("获取c参数中..."):
-                c_param = get_c_param(item_id)
-                st.session_state.current_c_param = c_param
-                st.success(f"✅ c参数获取成功")
-                st.info(f"c参数: {c_param[:80]}...")
-        except Exception as e:
-            st.error(f"获取失败: {str(e)}")
-    
-    if st.session_state.current_c_param:
-        st.success("✅ c参数已就绪")
     
     st.divider()
     
@@ -493,8 +411,6 @@ def main():
             st.error("❌ 请输入商品ID")
         elif not new_image_data:
             st.error("❌ 请先选择图片")
-        elif not st.session_state.current_c_param:
-            st.error("❌ 请先获取c参数")
         else:
             try:
                 with st.spinner("处理中..."):
@@ -507,7 +423,7 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param)
+                    result = edit_item_image(item_id, final_url)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
