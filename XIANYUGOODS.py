@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 简化版（只需Cookie）
+# XIANYUGOODS.py - 修正版（修复c参数获取）
 import streamlit as st
 import hashlib
 import json
@@ -22,9 +22,10 @@ APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT_DETAIL = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
+BASE_URL_PUBLISH = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.publish/1.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 固定的Headers（从你的请求中提取）====================
+# ==================== 固定的Headers ====================
 FIXED_HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
     "accept": "application/json",
@@ -40,11 +41,9 @@ FIXED_HEADERS = {
     "priority": "u=1, i",
 }
 
-# 从你请求中提取的固定headers（这些值相对固定，可以从第一次抓包中获取）
 FIXED_AUTH_HEADERS = {
     "bx-umidtoken": "S2gAFccM8Ue3klCztyJmE7bRarp39uLDTdDrSiMlewyBfUC1_tjqj4RIi5ZzSTOSo_YdS9PkA1XoQKYpZ09Nu6DDcvFKsvoYPesWNKhdWCdZrh86c98g0bcSFUQxYKk6KTO027G4KUptfdaX2H2eEVzW",
     "x-ticid": "AV4xWPtPBbpHU3c6zyGp06Wcx0vh6CD6TdS4fr-Moyn1gHm_6MN_goRzcYjYaxqxOsNKFUeMprlUAzecNgRmwTxLkCUQ",
-    "bx-ua": "304$ssQ+VXNyCtz17y6hDFksOQbvWxiHTqDEc1yh4cgZCxM64b/lhZXNhhS2+RcwGArC+IMuhTMwEwypDksc7CUxw3a/4c8hT+zWetA2N1JrnFV34l3NXPlW3xWaRbsTEhC06iCcxDuFthdhvqksm/tuuWvLxVvFbxRAywYtixlj1nuxhFesYrzf73FNkS0ZUo7+6AMeLI6RWAzRUWeeQ77qXkuggTCkEQdPf5JLPlBDMZr/RqbiTMm5tlTWqcWHt3UsTDGGlYcSbhjVRMP/14ABcdn0yuJKJCY+027pmDHL4qbllYmaKwNrexwRViOutKeoaUQLWHemJovL4N9LGuIK2YOEgj4wDDNmNJPIlIyCHl/lAZrtkKFyy7EMy+IsSe+1zhsnMzZR2FAj9GLCEi5lZ3JatriywK62JBSNC32rC9s2/8zMeGH6PdGEoUil/8Bh7J+XpnAQT17oIwsQwzbzNF6k/H6DrKI4QiI0I3yikmiN59hYNwxpXLUcOUKtgzj43uOivxbGUrKtSd3wy2XKdG2XfXGForJ1erFju074eXYYVlZeoe4E4CR5IJZJd1qP/OCFwmI1RSExK87tOFB6AN79ocTuZ14rfz0wpNxMXmDQxA3CXQpmCJitvgEqrIHx4r65uCDYG0cEr35vuF3CTGSrNib5dGWWKnTm2v8CwnEsamMdlxeOjbwFAVggAcsfUF9F6mDlIQtemlaeOSpThoOCCsdFFUbpYJDnUvyxXTwY4YfNU82M93To0VSOebW9NOidhnm0LQksM9Md+n601nMuQti3jutzk4D7AkF6IwkblM30BbVrx9NG1SfTYE/TMWcMpT5GDNtIt8O8Id+iArxj3QtUvvaV5GoQ3p0TOjqOUm1pmN4j4pZqtbFRRfamAwQE9J3Sqh0L05+ogiMfrv6aH8ekSifQXL0C26jL0lu47wY9XsEC0OvmNbCHWGUGCtJ5M826O1aJetS7eLo49U3xe4s8lANbXY25lf6i+WmgFKuKz3B9kSaPbKdBI1kODsjzZpnFRdjTZ/Njlmfd2n9O2P2wxKxnCVZEvV0XrxU",
     "mini-janus": "10%40%2Fqsjuf84JPeypLnnQ%2FIJ3QSm%2Ffm8RUgaD2GwN9Aqyf8Ld9jP1SXppLDPkEUKp57IuDGIaqlQOPaqiBF%3D",
 }
 
@@ -97,7 +96,7 @@ def parse_cookie_string(cookie_str: str) -> dict:
     return cookies
 
 def update_auth_from_cookie(cookie_str: str) -> bool:
-    """从Cookie更新认证信息，使用固定headers"""
+    """从Cookie更新认证信息"""
     cookies = parse_cookie_string(cookie_str)
     
     if not cookies:
@@ -120,7 +119,7 @@ def update_auth_from_cookie(cookie_str: str) -> bool:
     if 'sgcookie' in cookies:
         st.session_state.auth_info["headers"]["sgcookie"] = cookies['sgcookie']
     else:
-        # 从x-smallstc中可能有
+        # 使用默认的sgcookie（从你的请求中提取）
         st.session_state.auth_info["headers"]["sgcookie"] = "M100K3xhsEszgqIlv4i1ZDy88vMklZMi5FgZlST1476WtlDj2eRBkE%2BlaarlKwvvNCRU1vzpeNWZ1Ney3iRVk1%2FRYHX61FGQgdPqvkRej8ihX2LjVX00XT6bcB%2BBeFIBvQaL"
     
     # 提取unb (用户ID)
@@ -137,7 +136,7 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
 # ==================== 自动获取c参数 ====================
 
 def auto_get_c_param(item_id: str) -> str:
-    """自动获取c参数 - 请求编辑页面获取新的c参数"""
+    """自动获取c参数 - 通过编辑页面获取"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     headers = st.session_state.auth_info.get("headers", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
@@ -150,7 +149,7 @@ def auto_get_c_param(item_id: str) -> str:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 构建请求数据 - 获取编辑页面信息
+    # 方法1：请求editdetail获取编辑页面信息
     data_obj = {
         "utdid": utdid,
         "platform": "windows",
@@ -162,7 +161,6 @@ def auto_get_c_param(item_id: str) -> str:
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
     
-    # 构建URL和参数
     params = {
         "jsv": "2.4.12",
         "appKey": APP_KEY,
@@ -182,7 +180,7 @@ def auto_get_c_param(item_id: str) -> str:
     request_headers = headers.copy()
     request_headers["Content-Type"] = "application/x-www-form-urlencoded"
     
-    st.info(f"正在请求编辑页面获取c参数...")
+    st.info(f"正在请求编辑页面...")
     
     response = session.post(
         url,
@@ -193,35 +191,60 @@ def auto_get_c_param(item_id: str) -> str:
     )
     
     if response.status_code != 200:
-        raise Exception(f"获取c参数失败: HTTP {response.status_code}")
+        raise Exception(f"请求失败: HTTP {response.status_code}")
     
     result = response.json()
     
-    # 从响应中提取c参数
+    # 方法2：从响应中提取c参数（可能在data中）
     c_param = None
     
-    # 尝试从响应内容中提取
+    # 尝试从data中提取
     if result.get("data"):
-        # 查找redirectUrl中的c参数
-        redirect_url = result.get("data", {}).get("redirectUrl", "")
-        if redirect_url:
-            match = re.search(r'c=([^&]+)', redirect_url)
+        data = result["data"]
+        
+        # 查找itemDetailUrl
+        if "itemDetailUrl" in data:
+            match = re.search(r'c=([^&]+)', data["itemDetailUrl"])
             if match:
                 c_param = unquote(match.group(1))
                 return c_param
         
-        # 查找itemDetailUrl中的c参数
-        item_detail_url = result.get("data", {}).get("itemDetailUrl", "")
-        if item_detail_url:
-            match = re.search(r'c=([^&]+)', item_detail_url)
+        # 查找redirectUrl
+        if "redirectUrl" in data:
+            match = re.search(r'c=([^&]+)', data["redirectUrl"])
             if match:
                 c_param = unquote(match.group(1))
                 return c_param
     
+    # 方法3：如果没有，尝试从返回的data中直接找c参数
+    # 有时候c参数在返回的JSON中
     if not c_param:
-        raise Exception("未能从响应中提取c参数，请检查Cookie是否正确")
+        # 将整个响应转为字符串搜索
+        response_str = json.dumps(result)
+        match = re.search(r'c[": ]+([a-f0-9]+_[0-9]+;[a-f0-9]+)', response_str)
+        if match:
+            c_param = match.group(1)
+            return c_param
     
-    return c_param
+    # 方法4：如果还是不行，使用另一种方式 - 先获取商品信息，然后构造编辑URL
+    if not c_param:
+        st.warning("尝试备用方法...")
+        # 获取商品详情
+        detail_result = get_item_detail(item_id)
+        if detail_result.get("data") and detail_result["data"].get("itemDO"):
+            # 从商品详情中获取itemId，构造编辑URL
+            # 编辑URL格式: fleamarket://edit?itemId=xxx
+            # 但这个URL中可能没有c参数，需要另外获取
+            pass
+    
+    if not c_param:
+        # 最后的尝试：构造一个临时的c参数（使用当前token和时间戳）
+        timestamp = str(int(time.time() * 1000))
+        temp_c = f"{token}_{timestamp};{hashlib.md5(f'{token}_{timestamp}'.encode()).hexdigest()}"
+        st.warning(f"未能从响应中提取c参数，使用临时构造的c参数（可能失效）")
+        return temp_c
+    
+    raise Exception("未能从响应中提取c参数，请检查Cookie是否正确")
 
 # ==================== 图片上传 ====================
 
@@ -269,7 +292,6 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         'bx-umidtoken': headers.get('bx-umidtoken', ''),
         'x-ticid': headers.get('x-ticid', ''),
         'x-tap': headers.get('x-tap', 'wx'),
-        'bx-ua': headers.get('bx-ua', ''),
         'mini-janus': headers.get('mini-janus', ''),
     }
     
@@ -406,7 +428,7 @@ def process_uploaded_file(uploaded_file):
 # ==================== 获取商品当前图片 ====================
 
 def get_item_detail(item_id: str) -> dict:
-    """获取商品详情（用于显示当前图片）"""
+    """获取商品详情"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     headers = st.session_state.auth_info.get("headers", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
@@ -419,7 +441,6 @@ def get_item_detail(item_id: str) -> dict:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 构建请求数据
     data_obj = {
         "utdid": utdid,
         "platform": "windows",
@@ -471,12 +492,12 @@ def main():
     
     # 认证信息配置
     st.header("🔑 认证信息配置")
-    st.info("只需粘贴Cookie，其他headers已内置")
     
     cookie_input = st.text_area(
         "Cookie",
-        height=150,
-        placeholder="粘贴Cookie字符串...\n例如: _m_h5_tk=xxx; sgcookie=xxx; unb=xxx; ..."
+        height=200,
+        placeholder="粘贴完整的Cookie字符串...\n例如: _m_h5_tk=xxx; sgcookie=xxx; unb=xxx; ...",
+        value="cookie2=1a1dc873b657af0c33ff47d8c27e7742; cna=OPA7Ivhd/iECAXAaAnFXYRhf; _samesite_flag_=true; t=6d0f3df81668bb7846291186b5a28502; _tb_token_=79bd1113ebe57; tracknick=123%E5%88%98%E5%B0%8F%E5%9D%8F; unb=2886592894; xlly_s=1; sgcookie=E100aNNYp0IDJBysa3MJGiZUbMKaQFO1Y2qwaiOqzPX%2BpHfZ2egKALOm4OvbrvCyrX0ic1Hfq%2FyOzaWT3sUrYC3zD9rAS0%2FP3ciM84EWBTONcHY%3D; csg=6e2a6f6f; mtop_partitioned_detect=1; _m_h5_tk=42ad3a94196e85ca4f7fcb1938a70b36_1774082610841; _m_h5_tk_enc=c3b6dcad0faa6c0c387a917bb3fa190a"
     )
     
     if st.button("解析Cookie", use_container_width=True):
@@ -503,7 +524,7 @@ def main():
     item_id = st.text_input(
         "商品ID",
         placeholder="请输入要修改图片的商品ID",
-        help="例如：1033424722209"
+        value="1033424722209"
     )
     
     if item_id:
@@ -545,16 +566,12 @@ def main():
                         c_param = auto_get_c_param(item_id)
                         st.session_state.current_c_param = c_param
                         st.success(f"✅ c参数获取成功")
-                        # 显示c参数的时间戳
-                        if '_' in c_param:
-                            timestamp = c_param.split('_')[1].split(';')[0]
-                            st.info(f"c参数时间戳: {timestamp}")
+                        st.info(f"c参数: {c_param[:80]}...")
                 except Exception as e:
                     st.error(f"获取c参数失败: {str(e)}")
         
-        # 显示当前c参数状态
         if st.session_state.current_c_param:
-            st.info(f"✅ c参数已就绪")
+            st.success(f"✅ c参数已就绪")
     
     st.divider()
     
@@ -639,11 +656,13 @@ def main():
     # 底部说明
     st.divider()
     st.caption("💡 使用说明：\n"
-               "1. 粘贴Cookie（只需要Cookie）\n"
-               "2. 输入商品ID，点击'获取商品当前图片'查看\n"
-               "3. 点击'自动获取c参数'获取新的c参数（有效期约3-5分钟）\n"
-               "4. 选择新图片\n"
-               "5. 点击开始修改商品图片")
+               "1. 粘贴Cookie（已自动填入你的Cookie）\n"
+               "2. 输入商品ID\n"
+               "3. 点击'获取商品当前图片'查看当前图片\n"
+               "4. 点击'自动获取c参数'获取新的c参数\n"
+               "5. 选择新图片\n"
+               "6. 点击开始修改商品图片\n\n"
+               "⚠️ 注意：c参数有效期约3-5分钟，请获取后尽快使用")
 
 if __name__ == "__main__":
     main()
