@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 完善版（使用你提供的token提取方法）
+# XIANYUGOODS.py - 最终修正版
 import streamlit as st
 import hashlib
 import json
@@ -20,7 +20,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_DETAIL = "https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/"
-BASE_URL_UPDATE = "https://acs.m.goofish.com/h5/mtop.taobao.idle.item.update/1.0/"
+# 尝试不同的更新API
+BASE_URL_UPDATE = "https://acs.m.goofish.com/h5/mtop.taobao.idle.item.publish/1.0/"
+# 备用API
+BASE_URL_UPDATE_ALT = "https://acs.m.goofish.com/h5/mtop.idle.item.update/1.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
 # 全局session
@@ -56,7 +59,7 @@ if 'auth_parsed' not in st.session_state:
 if 'current_item_image' not in st.session_state:
     st.session_state.current_item_image = None
 
-# ==================== 从请求中提取信息（使用你的方法）====================
+# ==================== 从请求中提取信息 ====================
 
 def extract_from_request(request_text: str) -> dict:
     """从HTTP请求文本中提取所有必要信息"""
@@ -231,11 +234,11 @@ def update_token_from_response(response) -> bool:
             st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
             st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
             updated = True
-            st.info(f"✅ Token已更新: {st.session_state.auth_info['token'][:20]}...")
+            st.info(f"✅ Token已更新")
     
     return updated
 
-# ==================== 图片上传 ====================
+# ==================== 图片上传（增加超时时间）====================
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int = 0) -> str:
     """上传图片到闲鱼服务器"""
@@ -295,14 +298,22 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
         '_input_charset': 'utf-8',
     }
     
-    response = session.post(
-        UPLOAD_URL,
-        params=params,
-        headers=headers,
-        cookies=cookies,
-        data=body,
-        timeout=30
-    )
+    try:
+        response = session.post(
+            UPLOAD_URL,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            data=body,
+            timeout=60  # 增加超时时间到60秒
+        )
+    except requests.exceptions.Timeout:
+        if retry_count < 2:
+            st.warning(f"上传超时，第{retry_count + 1}次重试...")
+            time.sleep(2)
+            return upload_image(file_bytes, file_name, mime, retry_count + 1)
+        else:
+            raise Exception("上传超时，请检查网络或稍后重试")
     
     # 更新token
     update_token_from_response(response)
@@ -311,11 +322,6 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
         raise Exception(f"上传失败: HTTP {response.status_code}")
     
     result = response.json()
-    
-    # 如果token过期且未重试，则重试
-    if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]) and retry_count == 0:
-        st.info("Token过期，更新后重试上传...")
-        return upload_image(file_bytes, file_name, mime, retry_count=1)
     
     if not result.get('success'):
         raise Exception(f"上传失败: {result.get('message', '未知错误')}")
@@ -394,11 +400,11 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
         headers=headers,
         cookies=cookies,
         data={"data": data_str},
-        timeout=20
+        timeout=30
     )
     
     # 更新token
-    token_updated = update_token_from_response(response)
+    update_token_from_response(response)
     
     if response.status_code != 200:
         raise Exception(f"HTTP错误: {response.status_code}")
@@ -407,11 +413,7 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     
     # 如果token过期且未重试，则重试
     if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
-        if retry_count == 0 and token_updated:
-            st.info("Token过期，使用新token重试...")
-            time.sleep(1)
-            return get_item_detail(item_id, retry_count=1)
-        elif retry_count == 0:
+        if retry_count == 0:
             st.info("Token过期，尝试重试...")
             time.sleep(1)
             return get_item_detail(item_id, retry_count=1)
@@ -419,7 +421,7 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     return result
 
 def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dict:
-    """更新商品图片"""
+    """更新商品图片 - 使用正确的API"""
     global CURRENT_M_H5_TK
     
     token = st.session_state.auth_info["token"]
@@ -434,78 +436,91 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
     if CURRENT_M_H5_TK:
         cookies["_m_h5_tk"] = CURRENT_M_H5_TK
     
-    # 构建请求数据
+    # 构建请求数据 - 使用正确的字段名
     data_obj = {
         "utdid": utdid,
         "platform": "windows",
         "miniAppVersion": "9.9.9",
         "itemId": str(item_id),
-        "images": [image_url],
+        "imageUrl": image_url,  # 改为imageUrl
     }
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
     
-    # 构建URL和参数
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "c": c_param,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.taobao.idle.item.update",
-        "_bx-m": "1",
-    }
+    # 尝试不同的API
+    apis = [
+        "mtop.taobao.idle.item.publish",
+        "mtop.idle.item.update",
+        "mtop.taobao.idle.item.update"
+    ]
     
-    url = f"{BASE_URL_UPDATE}?{urlencode(params)}"
+    last_error = None
     
-    headers = {
-        "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    }
+    for api in apis:
+        try:
+            # 构建URL和参数
+            params = {
+                "jsv": "2.4.12",
+                "appKey": APP_KEY,
+                "t": t,
+                "sign": sign,
+                "c": c_param,
+                "v": "1.0",
+                "type": "originaljson",
+                "accountSite": "xianyu",
+                "dataType": "json",
+                "timeout": "20000",
+                "api": api,
+                "_bx-m": "1",
+            }
+            
+            url = f"https://acs.m.goofish.com/h5/{api}/1.0/?{urlencode(params)}"
+            
+            headers = {
+                "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+            }
+            
+            # 添加特殊headers
+            for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua']:
+                if h in st.session_state.auth_info.get('headers', {}):
+                    headers[h] = st.session_state.auth_info['headers'][h]
+            
+            st.info(f"尝试API: {api}")
+            
+            response = session.post(
+                url,
+                headers=headers,
+                cookies=cookies,
+                data={"data": data_str},
+                timeout=30
+            )
+            
+            # 更新token
+            update_token_from_response(response)
+            
+            if response.status_code != 200:
+                last_error = f"HTTP {response.status_code}"
+                continue
+            
+            result = response.json()
+            
+            # 如果成功，返回结果
+            if result.get("ret") and "SUCCESS" in str(result["ret"]):
+                return result
+            
+            last_error = result.get("ret", ["未知错误"])[0]
+            
+        except Exception as e:
+            last_error = str(e)
+            continue
     
-    # 添加特殊headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua']:
-        if h in st.session_state.auth_info.get('headers', {}):
-            headers[h] = st.session_state.auth_info['headers'][h]
-    
-    response = session.post(
-        url,
-        headers=headers,
-        cookies=cookies,
-        data={"data": data_str},
-        timeout=20
-    )
-    
-    # 更新token
-    token_updated = update_token_from_response(response)
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    # 如果token过期且未重试，则重试
-    if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
-        if retry_count == 0 and token_updated:
-            st.info("Token过期，使用新token重试...")
-            time.sleep(1)
-            return update_item_image(item_id, image_url, retry_count=1)
-        elif retry_count == 0:
-            st.info("Token过期，尝试重试...")
-            time.sleep(1)
-            return update_item_image(item_id, image_url, retry_count=1)
-    
-    return result
+    raise Exception(f"所有API都失败，最后错误: {last_error}")
 
 # ==================== 图片下载 ====================
 
@@ -681,9 +696,11 @@ def main():
                         st.info("上传图片中...")
                         final_url = upload_image(img_info["bytes"], img_info["name"], img_info["mime"])
                     
-                    st.info("图片上传成功，正在修改商品...")
+                    st.success(f"✅ 图片上传成功")
+                    st.info(f"图片URL: {final_url[:100]}...")
                     
                     # 修改商品图片
+                    st.info("正在修改商品图片...")
                     result = update_item_image(item_id, final_url)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
@@ -692,20 +709,21 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
+                        st.json(result)
                         
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
+                st.info("请检查：\n1. 商品ID是否正确\n2. 是否有修改该商品的权限\n3. Cookie是否有效")
     
     # 底部说明
     st.divider()
     st.caption("💡 使用说明：\n"
-               "1. 从浏览器开发者工具复制完整的HTTP请求头（从 POST 开始到 data=... 结束）\n"
+               "1. 从浏览器开发者工具复制完整的HTTP请求头\n"
                "2. 粘贴到上方文本框并点击解析\n"
-               "3. 程序会自动提取 token 和认证信息\n"
-               "4. 输入商品ID，点击获取当前图片确认商品\n"
-               "5. 选择新图片（支持URL或本地上传）\n"
-               "6. 点击开始修改商品图片\n"
-               "7. 程序会自动处理token更新和重试")
+               "3. 输入商品ID，点击获取当前图片确认商品\n"
+               "4. 选择新图片（支持URL或本地上传）\n"
+               "5. 点击开始修改商品图片\n"
+               "6. 程序会尝试多个API接口")
 
 if __name__ == "__main__":
     main()
