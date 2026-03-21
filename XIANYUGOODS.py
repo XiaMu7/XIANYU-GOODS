@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 最终修复版（使用你成功请求的完整data）
+# XIANYUGOODS.py - 修复Cookie解析
 import streamlit as st
 import hashlib
 import json
@@ -69,8 +69,11 @@ if 'auth_parsed' not in st.session_state:
 # ==================== 解析Cookie ====================
 
 def parse_cookie_string(cookie_str: str) -> dict:
+    """解析cookie字符串为字典"""
     cookies = {}
     try:
+        # 先清理字符串
+        cookie_str = cookie_str.strip()
         items = cookie_str.split(';')
         for item in items:
             item = item.strip()
@@ -82,33 +85,46 @@ def parse_cookie_string(cookie_str: str) -> dict:
     return cookies
 
 def update_auth_from_cookie(cookie_str: str) -> bool:
+    """从Cookie更新认证信息"""
     cookies = parse_cookie_string(cookie_str)
+    
     if not cookies:
+        st.error("Cookie为空")
         return False
     
     st.session_state.auth_info["cookies"] = cookies
+    
+    # 打印所有cookie keys用于调试
+    st.info(f"Cookie keys: {list(cookies.keys())}")
+    
+    # 提取_m_h5_tk
     if '_m_h5_tk' in cookies:
         m_h5_tk = cookies['_m_h5_tk']
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
         st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
         st.session_state.auth_parsed = True
         return True
-    return False
+    else:
+        st.error("Cookie中没有 _m_h5_tk")
+        return False
 
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-# ==================== 获取完整编辑数据 ====================
+# ==================== 获取商品完整数据 ====================
 
 def get_full_edit_data(item_id: str) -> dict:
-    """获取完整的编辑数据（从服务器获取当前商品信息）"""
+    """获取完整的商品数据"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
     
     if not token and m_h5_tk:
         token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    
+    st.info(f"使用的token: {token}")
+    st.info(f"使用的_m_h5_tk: {m_h5_tk}")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -158,12 +174,12 @@ def get_full_edit_data(item_id: str) -> dict:
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
     
     if response.status_code != 200:
-        raise Exception(f"获取商品信息失败: HTTP {response.status_code}")
+        raise Exception(f"HTTP错误: {response.status_code}")
     
     result = response.json()
     
     if not result.get("ret") or "SUCCESS" not in str(result["ret"]):
-        raise Exception(f"获取商品信息失败: {result.get('ret')}")
+        raise Exception(f"获取失败: {result.get('ret')}")
     
     return result
 
@@ -223,7 +239,7 @@ def get_c_param(item_id: str) -> str:
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
     
     if response.status_code != 200:
-        raise Exception(f"获取c参数失败: HTTP {response.status_code}")
+        raise Exception(f"HTTP错误: {response.status_code}")
     
     result = response.json()
     
@@ -233,10 +249,6 @@ def get_c_param(item_id: str) -> str:
         match = re.search(r'c=([^&]+)', redirect_url)
         if match:
             return unquote(match.group(1))
-    
-    # 从响应中直接获取
-    if result.get("c"):
-        return result["c"]
     
     raise Exception("未能提取c参数")
 
@@ -446,7 +458,7 @@ def main():
     
     cookie_input = st.text_area(
         "Cookie",
-        height=150,
+        height=200,
         placeholder="粘贴完整的Cookie字符串...",
         value="cookie2=1a1dc873b657af0c33ff47d8c27e7742; cna=OPA7Ivhd/iECAXAaAnFXYRhf; _samesite_flag_=true; t=6d0f3df81668bb7846291186b5a28502; _tb_token_=79bd1113ebe57; tracknick=123%E5%88%98%E5%B0%8F%E5%9D%8F; unb=2886592894; xlly_s=1; sgcookie=E100aNNYp0IDJBysa3MJGiZUbMKaQFO1Y2qwaiOqzPX%2BpHfZ2egKALOm4OvbrvCyrX0ic1Hfq%2FyOzaWT3sUrYC3zD9rAS0%2FP3ciM84EWBTONcHY%3D; csg=6e2a6f6f; mtop_partitioned_detect=1; _m_h5_tk=42ad3a94196e85ca4f7fcb1938a70b36_1774082610841; _m_h5_tk_enc=c3b6dcad0faa6c0c387a917bb3fa190a"
     )
@@ -455,6 +467,7 @@ def main():
         if update_auth_from_cookie(cookie_input):
             st.success("✅ Cookie解析成功")
             st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
+            st.info(f"_m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:50]}...")
     
     if not st.session_state.auth_parsed:
         st.warning("⚠️ 请先粘贴Cookie并解析")
@@ -477,7 +490,8 @@ def main():
                     if image_infos:
                         st.session_state.current_item_image = image_infos[0].get("url")
                     st.success("✅ 商品数据获取成功")
-                    st.image(st.session_state.current_item_image, width=150)
+                    if st.session_state.current_item_image:
+                        st.image(st.session_state.current_item_image, width=150)
             except Exception as e:
                 st.error(f"获取失败: {str(e)}")
     
@@ -560,7 +574,7 @@ def main():
     
     st.divider()
     st.caption("💡 使用步骤：\n"
-               "1. 解析Cookie\n"
+               "1. 解析Cookie（会显示token和_m_h5_tk）\n"
                "2. 点击'获取商品完整数据'获取当前商品所有信息\n"
                "3. 点击'获取c参数'获取新的c参数\n"
                "4. 选择新图片\n"
