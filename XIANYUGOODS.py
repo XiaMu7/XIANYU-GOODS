@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 手动输入c参数版
+# XIANYUGOODS.py - 自动获取c参数版（修复Cookie匹配）
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote
 import os
 import random
 import string
@@ -13,16 +13,14 @@ import urllib3
 from PIL import Image
 import re
 
-# 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 常量定义
 APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# 从你成功的请求中提取的固定Headers
+# 固定的headers（这些是设备相关的，一般不变）
 FIXED_HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
     "accept": "application/json",
@@ -48,6 +46,8 @@ st.set_page_config(page_title="闲鱼商品图片修改工具", page_icon="📷"
 
 if 'auth_info' not in st.session_state:
     st.session_state.auth_info = {"cookies": {}, "m_h5_tk": "", "token": ""}
+if 'current_c_param' not in st.session_state:
+    st.session_state.current_c_param = ""
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
 
@@ -84,6 +84,61 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
+# ==================== 自动获取c参数 ====================
+
+def auto_get_c_param(item_id: str) -> str:
+    """自动从编辑页面获取c参数"""
+    cookies = st.session_state.auth_info.get("cookies", {}).copy()
+    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
+    token = st.session_state.auth_info.get("token", "")
+    
+    if not token and m_h5_tk:
+        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    
+    if m_h5_tk:
+        cookies["_m_h5_tk"] = m_h5_tk
+    
+    data_obj = {
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "itemId": str(item_id),
+    }
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+    
+    t = str(int(time.time() * 1000))
+    sign = calc_sign(token, t, APP_KEY, data_str)
+    
+    params = {
+        "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
+        "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
+        "dataType": "json", "timeout": "20000",
+        "api": "mtop.idle.wx.idleitem.editdetail", "_bx-m": "1",
+    }
+    
+    url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
+    
+    headers = FIXED_HEADERS.copy()
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    headers["sgcookie"] = cookies.get('sgcookie', '')
+    
+    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
+    
+    if response.status_code != 200:
+        raise Exception(f"HTTP错误: {response.status_code}")
+    
+    result = response.json()
+    
+    if result.get("data") and result["data"].get("redirectUrl"):
+        redirect_url = result["data"]["redirectUrl"]
+        match = re.search(r'c=([^&]+)', redirect_url)
+        if match:
+            return unquote(match.group(1))
+    
+    raise Exception("未能提取c参数")
+
+# ==================== 上传图片 ====================
+
 def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
@@ -114,6 +169,7 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     params = {'folderId': '0', 'appkey': 'fleamarket', '_input_charset': 'utf-8'}
     
     response = session.post(UPLOAD_URL, params=params, headers=upload_headers, cookies=cookies, data=body, timeout=60)
+    
     if response.status_code != 200:
         raise Exception(f"上传失败: HTTP {response.status_code}")
     result = response.json()
@@ -123,6 +179,8 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     if not image_url:
         raise Exception("响应中没有图片URL")
     return image_url
+
+# ==================== 修改商品图片 ====================
 
 def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
@@ -242,11 +300,18 @@ def main():
     st.header("📦 商品信息")
     item_id = st.text_input("商品ID", value="1033424722209")
     
-    st.info("💡 请在浏览器中进入商品编辑页面，复制c参数（从URL中）")
-    c_param_input = st.text_input(
-        "c参数",
-        placeholder="例如: 779b2ca8c1be888974d5819c4993c833_1774081393421;ad5680b748b5fa2cc2acaf0da35f03f0"
-    )
+    if st.button("🔄 自动获取c参数", use_container_width=True):
+        try:
+            with st.spinner("获取c参数中..."):
+                c_param = auto_get_c_param(item_id)
+                st.session_state.current_c_param = c_param
+                st.success(f"✅ c参数获取成功")
+                st.info(f"c参数: {c_param[:80]}...")
+        except Exception as e:
+            st.error(f"获取失败: {str(e)}")
+    
+    if st.session_state.current_c_param:
+        st.success("✅ c参数已就绪")
     
     st.divider()
     
@@ -280,8 +345,8 @@ def main():
             st.error("❌ 请输入商品ID")
         elif not new_image_data:
             st.error("❌ 请先选择图片")
-        elif not c_param_input:
-            st.error("❌ 请输入c参数")
+        elif not st.session_state.current_c_param:
+            st.error("❌ 请先获取c参数")
         else:
             try:
                 with st.spinner("处理中..."):
@@ -294,7 +359,7 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    result = edit_item_image(item_id, final_url, c_param_input)
+                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
