@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 完整自动版（自动获取c参数）
+# XIANYUGOODS.py - 简化版（只需Cookie）
 import streamlit as st
 import hashlib
 import json
@@ -23,6 +23,30 @@ UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT_DETAIL = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
+
+# ==================== 固定的Headers（从你的请求中提取）====================
+FIXED_HEADERS = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
+    "accept": "application/json",
+    "content-type": "application/x-www-form-urlencoded",
+    "referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+    "origin": "https://servicewechat.com",
+    "x-tap": "wx",
+    "xweb_xhr": "1",
+    "sec-fetch-site": "cross-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    "accept-language": "zh-CN,zh;q=0.9",
+    "priority": "u=1, i",
+}
+
+# 从你请求中提取的固定headers（这些值相对固定，可以从第一次抓包中获取）
+FIXED_AUTH_HEADERS = {
+    "bx-umidtoken": "S2gAFccM8Ue3klCztyJmE7bRarp39uLDTdDrSiMlewyBfUC1_tjqj4RIi5ZzSTOSo_YdS9PkA1XoQKYpZ09Nu6DDcvFKsvoYPesWNKhdWCdZrh86c98g0bcSFUQxYKk6KTO027G4KUptfdaX2H2eEVzW",
+    "x-ticid": "AV4xWPtPBbpHU3c6zyGp06Wcx0vh6CD6TdS4fr-Moyn1gHm_6MN_goRzcYjYaxqxOsNKFUeMprlUAzecNgRmwTxLkCUQ",
+    "bx-ua": "304$ssQ+VXNyCtz17y6hDFksOQbvWxiHTqDEc1yh4cgZCxM64b/lhZXNhhS2+RcwGArC+IMuhTMwEwypDksc7CUxw3a/4c8hT+zWetA2N1JrnFV34l3NXPlW3xWaRbsTEhC06iCcxDuFthdhvqksm/tuuWvLxVvFbxRAywYtixlj1nuxhFesYrzf73FNkS0ZUo7+6AMeLI6RWAzRUWeeQ77qXkuggTCkEQdPf5JLPlBDMZr/RqbiTMm5tlTWqcWHt3UsTDGGlYcSbhjVRMP/14ABcdn0yuJKJCY+027pmDHL4qbllYmaKwNrexwRViOutKeoaUQLWHemJovL4N9LGuIK2YOEgj4wDDNmNJPIlIyCHl/lAZrtkKFyy7EMy+IsSe+1zhsnMzZR2FAj9GLCEi5lZ3JatriywK62JBSNC32rC9s2/8zMeGH6PdGEoUil/8Bh7J+XpnAQT17oIwsQwzbzNF6k/H6DrKI4QiI0I3yikmiN59hYNwxpXLUcOUKtgzj43uOivxbGUrKtSd3wy2XKdG2XfXGForJ1erFju074eXYYVlZeoe4E4CR5IJZJd1qP/OCFwmI1RSExK87tOFB6AN79ocTuZ14rfz0wpNxMXmDQxA3CXQpmCJitvgEqrIHx4r65uCDYG0cEr35vuF3CTGSrNib5dGWWKnTm2v8CwnEsamMdlxeOjbwFAVggAcsfUF9F6mDlIQtemlaeOSpThoOCCsdFFUbpYJDnUvyxXTwY4YfNU82M93To0VSOebW9NOidhnm0LQksM9Md+n601nMuQti3jutzk4D7AkF6IwkblM30BbVrx9NG1SfTYE/TMWcMpT5GDNtIt8O8Id+iArxj3QtUvvaV5GoQ3p0TOjqOUm1pmN4j4pZqtbFRRfamAwQE9J3Sqh0L05+ogiMfrv6aH8ekSifQXL0C26jL0lu47wY9XsEC0OvmNbCHWGUGCtJ5M826O1aJetS7eLo49U3xe4s8lANbXY25lf6i+WmgFKuKz3B9kSaPbKdBI1kODsjzZpnFRdjTZ/Njlmfd2n9O2P2wxKxnCVZEvV0XrxU",
+    "mini-janus": "10%40%2Fqsjuf84JPeypLnnQ%2FIJ3QSm%2Ffm8RUgaD2GwN9Aqyf8Ld9jP1SXppLDPkEUKp57IuDGIaqlQOPaqiBF%3D",
+}
 
 # 全局session
 session = requests.Session()
@@ -72,39 +96,36 @@ def parse_cookie_string(cookie_str: str) -> dict:
         st.error(f"Cookie解析失败: {str(e)}")
     return cookies
 
-def update_auth_from_cookie(cookie_str: str, headers_str: str = "") -> bool:
-    """从Cookie和headers更新认证信息"""
+def update_auth_from_cookie(cookie_str: str) -> bool:
+    """从Cookie更新认证信息，使用固定headers"""
     cookies = parse_cookie_string(cookie_str)
     
     if not cookies:
         return False
     
+    # 合并固定的headers
+    headers = FIXED_HEADERS.copy()
+    headers.update(FIXED_AUTH_HEADERS)
+    
     st.session_state.auth_info["cookies"] = cookies
+    st.session_state.auth_info["headers"] = headers
     
     # 提取_m_h5_tk
     if '_m_h5_tk' in cookies:
         m_h5_tk = cookies['_m_h5_tk']
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
         st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
-        st.session_state.current_m_h5_tk = m_h5_tk
     
     # 提取sgcookie
     if 'sgcookie' in cookies:
         st.session_state.auth_info["headers"]["sgcookie"] = cookies['sgcookie']
+    else:
+        # 从x-smallstc中可能有
+        st.session_state.auth_info["headers"]["sgcookie"] = "M100K3xhsEszgqIlv4i1ZDy88vMklZMi5FgZlST1476WtlDj2eRBkE%2BlaarlKwvvNCRU1vzpeNWZ1Ney3iRVk1%2FRYHX61FGQgdPqvkRej8ihX2LjVX00XT6bcB%2BBeFIBvQaL"
     
     # 提取unb (用户ID)
     if 'unb' in cookies:
         st.session_state.auth_info["user_id"] = cookies['unb']
-    
-    # 解析额外的headers
-    if headers_str:
-        lines = headers_str.strip().split('\n')
-        for line in lines:
-            if ': ' in line:
-                key, value = line.split(': ', 1)
-                key_lower = key.lower()
-                if key_lower in ['bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua', 'mini-janus']:
-                    st.session_state.auth_info["headers"][key] = value
     
     return True
 
@@ -158,18 +179,8 @@ def auto_get_c_param(item_id: str) -> str:
     
     url = f"{BASE_URL_EDIT_DETAIL}?{urlencode(params)}"
     
-    request_headers = {
-        "User-Agent": headers.get('user-agent', 
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    }
-    
-    # 添加特殊headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua', 'mini-janus']:
-        if h in headers:
-            request_headers[h] = headers[h]
+    request_headers = headers.copy()
+    request_headers["Content-Type"] = "application/x-www-form-urlencoded"
     
     st.info(f"正在请求编辑页面获取c参数...")
     
@@ -197,7 +208,6 @@ def auto_get_c_param(item_id: str) -> str:
             match = re.search(r'c=([^&]+)', redirect_url)
             if match:
                 c_param = unquote(match.group(1))
-                st.success(f"从redirectUrl提取到c参数")
                 return c_param
         
         # 查找itemDetailUrl中的c参数
@@ -206,19 +216,10 @@ def auto_get_c_param(item_id: str) -> str:
             match = re.search(r'c=([^&]+)', item_detail_url)
             if match:
                 c_param = unquote(match.group(1))
-                st.success(f"从itemDetailUrl提取到c参数")
                 return c_param
     
-    # 尝试从响应headers中提取
-    if 'location' in response.headers:
-        match = re.search(r'c=([^&]+)', response.headers['location'])
-        if match:
-            c_param = unquote(match.group(1))
-            st.success(f"从location header提取到c参数")
-            return c_param
-    
     if not c_param:
-        raise Exception("未能从响应中提取c参数，请检查Cookie和headers是否正确")
+        raise Exception("未能从响应中提取c参数，请检查Cookie是否正确")
     
     return c_param
 
@@ -264,12 +265,13 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         'Origin': 'https://servicewechat.com',
         'Referer': headers.get('referer', 'https://servicewechat.com/wx9882f2a891880616/75/page-frame.html'),
         'User-Agent': headers.get('user-agent', 'Mozilla/5.0'),
+        'sgcookie': headers.get('sgcookie', ''),
+        'bx-umidtoken': headers.get('bx-umidtoken', ''),
+        'x-ticid': headers.get('x-ticid', ''),
+        'x-tap': headers.get('x-tap', 'wx'),
+        'bx-ua': headers.get('bx-ua', ''),
+        'mini-janus': headers.get('mini-janus', ''),
     }
-    
-    # 复制所有关键headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua', 'mini-janus']:
-        if h in headers:
-            upload_headers[h] = headers[h]
     
     params = {
         'folderId': '0',
@@ -346,16 +348,8 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     
     url = f"{BASE_URL_EDIT}?{urlencode(params)}"
     
-    request_headers = {
-        "User-Agent": headers.get('user-agent', 'Mozilla/5.0'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    }
-    
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua', 'mini-janus']:
-        if h in headers:
-            request_headers[h] = headers[h]
+    request_headers = headers.copy()
+    request_headers["Content-Type"] = "application/x-www-form-urlencoded"
     
     response = session.post(
         url,
@@ -455,16 +449,8 @@ def get_item_detail(item_id: str) -> dict:
     
     url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/?{urlencode(params)}"
     
-    request_headers = {
-        "User-Agent": headers.get('user-agent', 'Mozilla/5.0'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    }
-    
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap']:
-        if h in headers:
-            request_headers[h] = headers[h]
+    request_headers = headers.copy()
+    request_headers["Content-Type"] = "application/x-www-form-urlencoded"
     
     response = session.post(
         url,
@@ -481,12 +467,11 @@ def get_item_detail(item_id: str) -> dict:
 
 # ==================== 主界面 ====================
 def main():
-    st.title("📷 闲鱼商品图片修改工具（自动获取c参数版）")
+    st.title("📷 闲鱼商品图片修改工具")
     
     # 认证信息配置
     st.header("🔑 认证信息配置")
-    
-    st.info("请粘贴完整的Cookie字符串（必需）")
+    st.info("只需粘贴Cookie，其他headers已内置")
     
     cookie_input = st.text_area(
         "Cookie",
@@ -494,20 +479,11 @@ def main():
         placeholder="粘贴Cookie字符串...\n例如: _m_h5_tk=xxx; sgcookie=xxx; unb=xxx; ..."
     )
     
-    st.info("请粘贴额外的Headers（可选，但建议填写以增加成功率）")
-    st.caption("需要的headers: bx-umidtoken, x-ticid, x-tap, bx-ua, mini-janus")
-    
-    headers_input = st.text_area(
-        "Headers",
-        height=150,
-        placeholder="bx-umidtoken: xxx\nx-ticid: xxx\nx-tap: wx\nbx-ua: xxx\nmini-janus: xxx"
-    )
-    
-    if st.button("解析认证信息", use_container_width=True):
+    if st.button("解析Cookie", use_container_width=True):
         if cookie_input:
-            if update_auth_from_cookie(cookie_input, headers_input):
+            if update_auth_from_cookie(cookie_input):
                 st.session_state.auth_parsed = True
-                st.success("✅ 认证信息解析成功")
+                st.success("✅ Cookie解析成功")
                 if st.session_state.auth_info.get("m_h5_tk"):
                     st.info(f"_m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:50]}...")
                 if st.session_state.auth_info.get("user_id"):
@@ -516,7 +492,7 @@ def main():
                 st.error("❌ Cookie解析失败")
     
     if not st.session_state.auth_parsed:
-        st.warning("⚠️ 请先配置并解析认证信息")
+        st.warning("⚠️ 请先粘贴Cookie并解析")
         return
     
     st.divider()
@@ -569,13 +545,16 @@ def main():
                         c_param = auto_get_c_param(item_id)
                         st.session_state.current_c_param = c_param
                         st.success(f"✅ c参数获取成功")
-                        st.info(f"c参数: {c_param[:100]}...")
+                        # 显示c参数的时间戳
+                        if '_' in c_param:
+                            timestamp = c_param.split('_')[1].split(';')[0]
+                            st.info(f"c参数时间戳: {timestamp}")
                 except Exception as e:
                     st.error(f"获取c参数失败: {str(e)}")
         
         # 显示当前c参数状态
         if st.session_state.current_c_param:
-            st.info(f"当前c参数有效，时间戳: {st.session_state.current_c_param.split('_')[1].split(';')[0] if '_' in st.session_state.current_c_param else '未知'}")
+            st.info(f"✅ c参数已就绪")
     
     st.divider()
     
@@ -660,12 +639,11 @@ def main():
     # 底部说明
     st.divider()
     st.caption("💡 使用说明：\n"
-               "1. 粘贴Cookie和Headers（bx-umidtoken, x-ticid等）\n"
-               "2. 输入商品ID，点击'获取商品当前图片'查看当前图片\n"
-               "3. 点击'自动获取c参数'获取新的c参数\n"
+               "1. 粘贴Cookie（只需要Cookie）\n"
+               "2. 输入商品ID，点击'获取商品当前图片'查看\n"
+               "3. 点击'自动获取c参数'获取新的c参数（有效期约3-5分钟）\n"
                "4. 选择新图片\n"
-               "5. 点击开始修改商品图片\n\n"
-               "⚠️ 注意：c参数有效期约3-5分钟，请获取后尽快使用")
+               "5. 点击开始修改商品图片")
 
 if __name__ == "__main__":
     main()
