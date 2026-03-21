@@ -1,9 +1,9 @@
-# app_item_image.py - 闲鱼商品图片修改工具（基于你的脚本逻辑）
+# XIANYUGOODS.py - 闲鱼商品图片修改工具（修复版）
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode, parse_qs
+from urllib.parse import urlencode, parse_qs, unquote
 import os
 import random
 import string
@@ -27,9 +27,6 @@ FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 session = requests.Session()
 session.verify = False
 
-# 全局 _m_h5_tk
-CURRENT_M_H5_TK = ""
-
 # 页面配置
 st.set_page_config(
     page_title="闲鱼商品图片修改工具",
@@ -47,6 +44,7 @@ if 'auth_info' not in st.session_state:
         "utdid": FIXED_UTDID,
         "token": "",
         "m_h5_tk": "",
+        "c_param": "",
     }
 
 if 'auth_parsed' not in st.session_state:
@@ -54,6 +52,9 @@ if 'auth_parsed' not in st.session_state:
 
 if 'current_item_image' not in st.session_state:
     st.session_state.current_item_image = None
+
+if 'current_m_h5_tk' not in st.session_state:
+    st.session_state.current_m_h5_tk = ""
 
 # ==================== 从请求中提取信息 ====================
 
@@ -67,6 +68,7 @@ def extract_from_request(request_text: str) -> dict:
         "utdid": None,
         "token": "",
         "m_h5_tk": "",
+        "c_param": "",
     }
     
     lines = request_text.strip().split('\n')
@@ -76,14 +78,26 @@ def extract_from_request(request_text: str) -> dict:
     url_match = re.search(r'\?(.*?)(?:\s|$)', first_line)
     if url_match:
         params_str = url_match.group(1)
-        params = parse_qs(params_str)
-        for k, v in params.items():
-            info["params"][k] = v[0] if v else ""
+        try:
+            params = parse_qs(params_str)
+            for k, v in params.items():
+                info["params"][k] = v[0] if v else ""
+        except:
+            pass
+        
+        # 提取c参数
+        if 'c' in info["params"]:
+            info["c_param"] = info["params"]["c"]
+        
+        # 提取_m_h5_tk
+        if '_m_h5_tk' in info["params"]:
+            info["m_h5_tk"] = info["params"]["_m_h5_tk"]
+            info["token"] = info["m_h5_tk"].split('_')[0] if '_' in info["m_h5_tk"] else info["m_h5_tk"]
     
     # 解析headers
     for line in lines[1:]:
         line = line.strip()
-        if not line or line.startswith('{') or line.startswith('h2'):
+        if not line or line.startswith('{') or line.startswith('h2') or line.startswith('POST') or line.startswith('GET'):
             continue
             
         if ': ' in line:
@@ -125,32 +139,31 @@ def extract_from_request(request_text: str) -> dict:
                 match = re.search(r'_m_h5_tk=([^;]+)', value)
                 if match and not info["m_h5_tk"]:
                     info["m_h5_tk"] = match.group(1)
-                    info["token"] = info["m_h5_tk"].split('_')[0]
-    
-    # 从URL参数中提取_m_h5_tk
-    if not info["m_h5_tk"] and "_m_h5_tk" in info["params"]:
-        info["m_h5_tk"] = info["params"]["_m_h5_tk"]
-        info["token"] = info["m_h5_tk"].split('_')[0]
+                    info["token"] = info["m_h5_tk"].split('_')[0] if '_' in info["m_h5_tk"] else info["m_h5_tk"]
     
     # 解析data部分 - 查找最后的数据行
     data_line = None
     for line in reversed(lines):
-        if line.strip().startswith('data='):
-            data_line = line.strip()
+        line = line.strip()
+        if line.startswith('data='):
+            data_line = line
             break
     
     if data_line:
-        data_str = data_line[5:]  # 去掉"data="
-        # URL解码
-        data_str = urllib.parse.unquote(data_str)
         try:
-            info["data"] = json.loads(data_str)
-            info["utdid"] = info["data"].get("utdid")
-        except json.JSONDecodeError:
-            # 如果JSON解析失败，尝试正则提取
-            utdid_match = re.search(r'utdid[":]+([^"]+)', data_str)
-            if utdid_match:
-                info["utdid"] = utdid_match.group(1)
+            data_str = data_line[5:]  # 去掉"data="
+            # URL解码
+            data_str = unquote(data_str)
+            try:
+                info["data"] = json.loads(data_str)
+                info["utdid"] = info["data"].get("utdid")
+            except json.JSONDecodeError:
+                # 如果JSON解析失败，尝试正则提取utdid
+                utdid_match = re.search(r'utdid[":]+([^"]+)', data_str)
+                if utdid_match:
+                    info["utdid"] = utdid_match.group(1)
+        except Exception as e:
+            print(f"解析data失败: {e}")
     
     # 如果没有utdid，使用默认值
     if not info["utdid"]:
@@ -160,7 +173,7 @@ def extract_from_request(request_text: str) -> dict:
 
 def update_auth_info(request_text: str) -> bool:
     """从请求文本更新认证信息"""
-    global CURRENT_M_H5_TK
+    global current_m_h5_tk
     
     info = extract_from_request(request_text)
     
@@ -168,12 +181,7 @@ def update_auth_info(request_text: str) -> bool:
         return False
     
     st.session_state.auth_info = info
-    
-    # 更新全局token
-    if info["m_h5_tk"]:
-        CURRENT_M_H5_TK = info["m_h5_tk"]
-        st.session_state.auth_info["m_h5_tk"] = info["m_h5_tk"]
-        st.session_state.auth_info["token"] = info["token"]
+    st.session_state.current_m_h5_tk = info["m_h5_tk"]
     
     return True
 
@@ -186,13 +194,13 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     """上传图片到闲鱼服务器"""
-    global CURRENT_M_H5_TK
+    global current_m_h5_tk
     
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
-    if CURRENT_M_H5_TK:
-        cookies["_m_h5_tk"] = CURRENT_M_H5_TK
+    if st.session_state.current_m_h5_tk:
+        cookies["_m_h5_tk"] = st.session_state.current_m_h5_tk
     
     # 构建multipart数据
     boundary = '----WebKitFormBoundary' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
@@ -227,7 +235,7 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         'Accept': '*/*',
         'Origin': 'https://servicewechat.com',
         'Referer': 'https://servicewechat.com/wx9882f2a891880616/75/page-frame.html',
-        'User-Agent': st.session_state.auth_info.get('headers', {}).get('User-Agent', 
+        'User-Agent': st.session_state.auth_info.get('headers', {}).get('user-agent', 
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
     }
     
@@ -263,18 +271,24 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     if not image_url:
         raise Exception("响应中没有图片URL")
     
+    # 更新token
+    if '_m_h5_tk' in response.cookies:
+        new_m_h5_tk = response.cookies['_m_h5_tk']
+        if new_m_h5_tk != st.session_state.current_m_h5_tk:
+            st.session_state.current_m_h5_tk = new_m_h5_tk
+            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
+            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
+    
     return image_url
 
 # ==================== 商品操作 ====================
 
 def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     """获取商品详情"""
-    global CURRENT_M_H5_TK
-    
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
-    m_h5_tk = CURRENT_M_H5_TK
+    m_h5_tk = st.session_state.current_m_h5_tk
     token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
     
     if m_h5_tk:
@@ -312,13 +326,13 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     }
     
     # 添加c参数
-    if "c" in st.session_state.auth_info.get("params", {}):
-        params["c"] = st.session_state.auth_info["params"]["c"]
+    if st.session_state.auth_info.get("c_param"):
+        params["c"] = st.session_state.auth_info["c_param"]
     
     url = f"{BASE_URL_DETAIL}?{urlencode(params)}"
     
     headers = {
-        "User-Agent": st.session_state.auth_info.get('headers', {}).get('User-Agent',
+        "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
@@ -341,11 +355,10 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     # 更新token
     if '_m_h5_tk' in response.cookies:
         new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != CURRENT_M_H5_TK:
-            print(f"更新 _m_h5_tk: {new_m_h5_tk}")
-            CURRENT_M_H5_TK = new_m_h5_tk
+        if new_m_h5_tk != st.session_state.current_m_h5_tk:
+            st.session_state.current_m_h5_tk = new_m_h5_tk
             st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0]
+            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
     
     if response.status_code != 200:
         raise Exception(f"HTTP错误: {response.status_code}")
@@ -354,19 +367,16 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     
     # 如果token非法且有新token，重试一次
     if result.get("ret") and "FAIL_SYS_TOKEN_ILLEGAL" in str(result["ret"]) and retry_count == 0:
-        print("检测到token非法，使用新token重试...")
         return get_item_detail(item_id, retry_count=1)
     
     return result
 
 def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dict:
     """更新商品图片"""
-    global CURRENT_M_H5_TK
-    
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
-    m_h5_tk = CURRENT_M_H5_TK
+    m_h5_tk = st.session_state.current_m_h5_tk
     token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
     
     if m_h5_tk:
@@ -403,13 +413,13 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
     }
     
     # 添加c参数
-    if "c" in st.session_state.auth_info.get("params", {}):
-        params["c"] = st.session_state.auth_info["params"]["c"]
+    if st.session_state.auth_info.get("c_param"):
+        params["c"] = st.session_state.auth_info["c_param"]
     
     url = f"{BASE_URL_UPDATE}?{urlencode(params)}"
     
     headers = {
-        "User-Agent": st.session_state.auth_info.get('headers', {}).get('User-Agent',
+        "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
@@ -432,11 +442,10 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
     # 更新token
     if '_m_h5_tk' in response.cookies:
         new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != CURRENT_M_H5_TK:
-            print(f"更新 _m_h5_tk: {new_m_h5_tk}")
-            CURRENT_M_H5_TK = new_m_h5_tk
+        if new_m_h5_tk != st.session_state.current_m_h5_tk:
+            st.session_state.current_m_h5_tk = new_m_h5_tk
             st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0]
+            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
     
     if response.status_code != 200:
         raise Exception(f"HTTP错误: {response.status_code}")
@@ -445,7 +454,6 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
     
     # 如果token非法且有新token，重试一次
     if result.get("ret") and "FAIL_SYS_TOKEN_ILLEGAL" in str(result["ret"]) and retry_count == 0:
-        print("检测到token非法，使用新token重试...")
         return update_item_image(item_id, image_url, retry_count=1)
     
     return result
@@ -491,8 +499,6 @@ def process_uploaded_file(uploaded_file):
 
 # ==================== 主界面 ====================
 def main():
-    global CURRENT_M_H5_TK
-    
     st.title("📷 闲鱼商品图片修改工具")
     
     # 认证信息配置
@@ -514,13 +520,13 @@ def main():
                 
                 # 显示解析结果
                 if st.session_state.auth_info.get("m_h5_tk"):
-                    CURRENT_M_H5_TK = st.session_state.auth_info["m_h5_tk"]
-                    st.info(f"✅ _m_h5_tk: {CURRENT_M_H5_TK[:30]}...")
+                    st.info(f"✅ _m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:30]}...")
+                if st.session_state.auth_info.get("token"):
                     st.info(f"✅ token: {st.session_state.auth_info['token'][:20]}...")
                 if st.session_state.auth_info.get("utdid"):
                     st.info(f"✅ utdid: {st.session_state.auth_info['utdid']}")
-                if st.session_state.auth_info.get("cookies"):
-                    st.info(f"✅ cookies: {list(st.session_state.auth_info['cookies'].keys())}")
+                if st.session_state.auth_info.get("c_param"):
+                    st.info(f"✅ c参数: {st.session_state.auth_info['c_param'][:30]}...")
             else:
                 st.error("❌ 解析失败，请检查格式")
     
@@ -569,7 +575,6 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"获取商品信息失败: {error_msg}")
-                        st.json(result)
             except Exception as e:
                 st.error(f"获取商品信息失败: {str(e)}")
     
@@ -635,7 +640,7 @@ def main():
                         st.info("上传图片中...")
                         final_url = upload_image(img_info["bytes"], img_info["name"], img_info["mime"])
                     
-                    st.info(f"图片上传成功，正在修改商品...")
+                    st.info("图片上传成功，正在修改商品...")
                     
                     # 修改商品图片
                     result = update_item_image(item_id, final_url)
@@ -646,7 +651,6 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
-                        st.json(result)
                         
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
