@@ -1,4 +1,4 @@
-# app_item_image.py - 闲鱼商品图片修改工具
+# app_item_image.py - 闲鱼商品图片修改工具（修复版）
 import streamlit as st
 import hashlib
 import json
@@ -21,6 +21,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 常量定义
 APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
+BASE_URL = "https://acs.m.goofish.com/h5/"
 
 # 固定的utdid
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
@@ -72,6 +73,12 @@ if 'login_success' not in st.session_state:
 if 'update_status' not in st.session_state:
     st.session_state.update_status = None
 
+if 'current_item_image' not in st.session_state:
+    st.session_state.current_item_image = None
+
+if 'item_info' not in st.session_state:
+    st.session_state.item_info = None
+
 # ==================== 工具函数 ====================
 
 def parse_cookie_string(cookie_str: str) -> dict:
@@ -112,34 +119,33 @@ def update_auth_info_from_cookie(cookie_str: str):
 
 def download_image_with_fallback(url: str) -> Tuple[bytes, str, str]:
     """下载图片"""
-    with st.spinner("🔄 下载图片中..."):
-        session = requests.Session()
-        session.verify = False
+    session = requests.Session()
+    session.verify = False
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    try:
+        response = session.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        content = response.content
+        if len(content) == 0:
+            raise Exception("文件为空")
         
-        try:
-            response = session.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            
-            content = response.content
-            if len(content) == 0:
-                raise Exception("文件为空")
-            
-            parsed = urllib.parse.urlparse(url)
-            file_name = os.path.basename(parsed.path)
-            if not file_name or '.' not in file_name:
-                file_name = f"image_{int(time.time())}.jpg"
-            
-            content_type = response.headers.get('Content-Type', '')
-            mime = content_type.split(';')[0].strip() or 'image/jpeg'
-            
-            return content, file_name, mime
-            
-        except Exception as e:
-            raise e
+        parsed = urllib.parse.urlparse(url)
+        file_name = os.path.basename(parsed.path)
+        if not file_name or '.' not in file_name:
+            file_name = f"image_{int(time.time())}.jpg"
+        
+        content_type = response.headers.get('Content-Type', '')
+        mime = content_type.split(';')[0].strip() or 'image/jpeg'
+        
+        return content, file_name, mime
+        
+    except Exception as e:
+        raise e
 
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     """计算签名"""
@@ -249,22 +255,24 @@ def update_item_image(item_id: str, image_url: str, auth_info: dict) -> dict:
     
     utdid = auth_info.get("utdid", FIXED_UTDID)
 
-    # 构建请求数据
+    # 构建请求数据 - 修改商品图片
     data_obj = {
         "utdid": utdid,
         "platform": "windows",
         "miniAppVersion": "9.9.9",
         "itemId": str(item_id),
-        "imageUrl": image_url,  # 修改商品的图片URL
+        "images": [image_url],  # 商品图片列表
     }
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+    
+    # URL编码data参数
+    encoded_data = urllib.parse.quote(data_str)
 
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
 
-    # 商品图片更新接口
+    # 商品更新接口
     API = "mtop.taobao.idle.item.update"
-    BASE_URL = f"https://acs.m.goofish.com/h5/{API}/1.0/"
     
     params = {
         "jsv": "2.4.12",
@@ -289,17 +297,28 @@ def update_item_image(item_id: str, image_url: str, auth_info: dict) -> dict:
     
     if 'sgcookie' in cookies:
         headers['sgcookie'] = cookies['sgcookie']
-
-    response = st.session_state.session.post(
-        f"{BASE_URL}?{urlencode(params)}",
-        headers=headers,
-        cookies=cookies,
-        data={"data": data_str},
-        timeout=20,
-        verify=False
-    )
     
-    return response.json()
+    # 使用requests.post发送请求，不要手动拼接URL
+    url = f"{BASE_URL}{API}/1.0/"
+    
+    try:
+        response = st.session_state.session.post(
+            url,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            data={"data": data_str},
+            timeout=20,
+            verify=False
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"HTTP错误: {response.status_code}")
+        
+        return response.json()
+        
+    except Exception as e:
+        raise Exception(f"请求失败: {str(e)}")
 
 def get_item_detail(item_id: str, auth_info: dict) -> dict:
     """获取商品详情"""
@@ -329,7 +348,6 @@ def get_item_detail(item_id: str, auth_info: dict) -> dict:
 
     # 商品详情接口
     API = "mtop.taobao.idle.weixin.detail"
-    BASE_URL = f"https://acs.m.goofish.com/h5/{API}/1.0/2.0/"
     
     params = {
         "jsv": "2.4.12",
@@ -354,17 +372,28 @@ def get_item_detail(item_id: str, auth_info: dict) -> dict:
     
     if 'sgcookie' in cookies:
         headers['sgcookie'] = cookies['sgcookie']
-
-    response = st.session_state.session.post(
-        f"{BASE_URL}?{urlencode(params)}",
-        headers=headers,
-        cookies=cookies,
-        data={"data": data_str},
-        timeout=20,
-        verify=False
-    )
     
-    return response.json()
+    # 使用requests.post发送请求
+    url = f"{BASE_URL}{API}/1.0/2.0/"
+    
+    try:
+        response = st.session_state.session.post(
+            url,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            data={"data": data_str},
+            timeout=20,
+            verify=False
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"HTTP错误: {response.status_code}")
+        
+        return response.json()
+        
+    except Exception as e:
+        raise Exception(f"请求失败: {str(e)}")
 
 def process_image_file(uploaded_file):
     """处理上传的图片文件"""
@@ -385,15 +414,18 @@ def process_image_file(uploaded_file):
 
 def upload_from_url(file_url: str, auth_info: dict) -> str:
     """从URL上传图片"""
-    content, file_name, mime = download_image_with_fallback(file_url)
-    return upload_bytes(file_name, content, mime, auth_info)
+    with st.spinner("下载图片中..."):
+        content, file_name, mime = download_image_with_fallback(file_url)
+    with st.spinner("上传图片中..."):
+        return upload_bytes(file_name, content, mime, auth_info)
 
 def upload_from_local(uploaded_file, auth_info: dict) -> str:
     """从本地上传图片"""
-    file_bytes = uploaded_file.getvalue()
-    file_name = uploaded_file.name
-    mime = uploaded_file.type or 'image/jpeg'
-    return upload_bytes(file_name, file_bytes, mime, auth_info)
+    with st.spinner("上传图片中..."):
+        file_bytes = uploaded_file.getvalue()
+        file_name = uploaded_file.name
+        mime = uploaded_file.type or 'image/jpeg'
+        return upload_bytes(file_name, file_bytes, mime, auth_info)
 
 # ==================== 登录页面 ====================
 def login_page():
@@ -418,18 +450,23 @@ def main_app():
     
     cookie_input = st.text_area(
         "Cookie字符串",
-        height=100,
-        placeholder="在这里粘贴完整的Cookie字符串...",
-        help="从浏览器开发者工具中复制Cookie"
+        height=150,
+        placeholder="在这里粘贴完整的Cookie字符串...\n\n例如: _m_h5_tk=xxx; sgcookie=xxx; ...",
+        help="从浏览器开发者工具中复制完整的Cookie"
     )
     
-    if st.button("解析Cookie"):
-        if cookie_input:
-            if update_auth_info_from_cookie(cookie_input):
-                st.session_state.cookie_parsed = True
-                st.success("✅ Cookie解析成功")
-            else:
-                st.error("❌ Cookie解析失败，请检查格式")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("解析Cookie", use_container_width=True):
+            if cookie_input:
+                if update_auth_info_from_cookie(cookie_input):
+                    st.session_state.cookie_parsed = True
+                    st.success("✅ Cookie解析成功")
+                    # 显示解析到的关键信息
+                    if st.session_state.current_m_h5_tk:
+                        st.info(f"已获取 _m_h5_tk: {st.session_state.current_m_h5_tk[:20]}...")
+                else:
+                    st.error("❌ Cookie解析失败，请检查格式")
     
     if not st.session_state.cookie_parsed:
         st.warning("⚠️ 请先配置并解析Cookie")
@@ -447,40 +484,54 @@ def main_app():
     )
     
     if item_id:
-        # 获取商品当前图片
-        if st.button("获取商品当前图片"):
-            try:
-                with st.spinner("获取商品信息中..."):
-                    result = get_item_detail(item_id, st.session_state.auth_info)
-                    
-                    if result.get("ret") and "SUCCESS" in str(result["ret"]):
-                        item_data = result.get("data", {}).get("itemDO", {})
-                        image_infos = item_data.get("imageInfos", [])
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("获取商品当前图片", use_container_width=True):
+                try:
+                    with st.spinner("获取商品信息中..."):
+                        result = get_item_detail(item_id, st.session_state.auth_info)
                         
-                        if image_infos:
-                            current_image_url = image_infos[0].get("url", "")
-                            st.session_state.current_item_image = current_image_url
-                            st.success(f"✅ 获取商品信息成功")
+                        if result.get("ret") and "SUCCESS" in str(result["ret"]):
+                            item_data = result.get("data", {}).get("itemDO", {})
+                            image_infos = item_data.get("imageInfos", [])
                             
-                            # 显示当前图片
-                            st.subheader("当前商品图片")
-                            st.image(current_image_url, width=200)
-                            
-                            # 显示商品标题
-                            title = item_data.get("title", "")
-                            if title:
-                                st.info(f"商品标题: {title}")
+                            if image_infos:
+                                current_image_url = image_infos[0].get("url", "")
+                                st.session_state.current_item_image = current_image_url
+                                st.session_state.item_info = {
+                                    "title": item_data.get("title", ""),
+                                    "desc": item_data.get("desc", ""),
+                                    "price": item_data.get("soldPrice", ""),
+                                    "image_count": len(image_infos)
+                                }
+                                st.success(f"✅ 获取商品信息成功")
+                                st.rerun()
+                            else:
+                                st.warning("未找到商品图片")
                         else:
-                            st.warning("未找到商品图片")
-                    else:
-                        st.error("获取商品信息失败")
-            except Exception as e:
-                st.error(f"获取商品信息失败: {str(e)}")
+                            error_msg = result.get("ret", ["未知错误"])[0]
+                            st.error(f"获取商品信息失败: {error_msg}")
+                except Exception as e:
+                    st.error(f"获取商品信息失败: {str(e)}")
+        
+        # 显示商品信息
+        if st.session_state.get('current_item_image'):
+            st.subheader("当前商品信息")
+            
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(st.session_state.current_item_image, width=200)
+            with col2:
+                if st.session_state.item_info:
+                    st.write(f"**标题:** {st.session_state.item_info['title']}")
+                    st.write(f"**描述:** {st.session_state.item_info['desc'][:100]}...")
+                    st.write(f"**价格:** {st.session_state.item_info['price']}元")
+                    st.write(f"**图片数量:** {st.session_state.item_info['image_count']}张")
     
     st.divider()
     
     # 图片上传
-    st.header("📤 图片上传")
+    st.header("📤 新图片上传")
     
     image_source = st.radio(
         "选择图片来源",
@@ -488,15 +539,18 @@ def main_app():
         horizontal=True
     )
     
+    new_image_url = None
+    uploaded_file = None
+    
     if image_source == "网络图片URL":
-        image_url = st.text_input(
+        new_image_url = st.text_input(
             "图片URL",
-            placeholder="https://example.com/image.jpg"
+            placeholder="https://example.com/new_image.jpg"
         )
         
-        if st.button("预览图片"):
-            if image_url:
-                st.session_state.preview_url = image_url
+        if st.button("预览新图片"):
+            if new_image_url:
+                st.session_state.preview_url = new_image_url
                 st.session_state.uploaded_file = None
         
     else:
@@ -513,10 +567,10 @@ def main_app():
     
     # 显示预览
     if st.session_state.get('preview_url'):
-        st.subheader("图片预览")
+        st.subheader("新图片预览")
         st.image(st.session_state.preview_url, width=200)
     elif st.session_state.get('uploaded_file'):
-        st.subheader("图片预览")
+        st.subheader("新图片预览")
         st.image(st.session_state.uploaded_file, width=200)
         preview_info = st.session_state.get('uploaded_file_preview')
         if preview_info:
@@ -527,47 +581,57 @@ def main_app():
     # 执行更新
     st.header("🚀 执行更新")
     
-    if st.button("开始修改商品图片", type="primary"):
+    # 检查是否有图片
+    has_image = False
+    if image_source == "网络图片URL":
+        has_image = new_image_url and new_image_url.strip()
+    else:
+        has_image = uploaded_file is not None
+    
+    if st.button("开始修改商品图片", type="primary", use_container_width=True, disabled=not has_image):
         if not item_id:
             st.error("❌ 请输入商品ID")
+        elif not has_image:
+            st.error("❌ 请先选择图片")
         else:
-            has_image = False
-            if image_source == "网络图片URL":
-                has_image = 'image_url' in locals() and image_url
-            else:
-                has_image = st.session_state.uploaded_file is not None
-            
-            if not has_image:
-                st.error("❌ 请先选择图片")
-            else:
-                try:
-                    with st.spinner("处理中..."):
-                        # 上传图片
-                        if image_source == "网络图片URL":
-                            final_url = upload_from_url(image_url, st.session_state.auth_info)
-                        else:
-                            final_url = upload_from_local(st.session_state.uploaded_file, st.session_state.auth_info)
+            try:
+                with st.spinner("处理中..."):
+                    # 上传图片
+                    if image_source == "网络图片URL":
+                        final_url = upload_from_url(new_image_url, st.session_state.auth_info)
+                    else:
+                        final_url = upload_from_local(uploaded_file, st.session_state.auth_info)
+                    
+                    st.info(f"图片已上传到闲鱼服务器")
+                    
+                    # 修改商品图片
+                    result = update_item_image(item_id, final_url, st.session_state.auth_info)
+                    
+                    if result.get("ret") and "SUCCESS" in str(result["ret"]):
+                        st.success("✅ 商品图片修改成功！")
+                        st.balloons()
+                        # 清除缓存，让用户重新获取
+                        st.session_state.current_item_image = None
+                        st.session_state.item_info = None
+                    else:
+                        error_msg = result.get("ret", ["未知错误"])[0]
+                        st.error(f"❌ 修改失败: {error_msg}")
                         
-                        st.info(f"图片已上传: {final_url[:100]}...")
+                        # 显示详细错误信息（调试用）
+                        if "ret" in result:
+                            st.json(result.get("ret"))
                         
-                        # 修改商品图片
-                        result = update_item_image(item_id, final_url, st.session_state.auth_info)
-                        
-                        if result.get("ret") and "SUCCESS" in str(result["ret"]):
-                            st.session_state.update_status = 'success'
-                            st.success("✅ 商品图片修改成功！")
-                        else:
-                            error_msg = result.get("ret", ["未知错误"])[0]
-                            st.error(f"❌ 修改失败: {error_msg}")
-                            st.session_state.update_status = 'error'
-                        
-                except Exception as e:
-                    st.error(f"❌ 修改失败: {str(e)}")
-                    st.session_state.update_status = 'error'
+            except Exception as e:
+                st.error(f"❌ 修改失败: {str(e)}")
     
     # 底部说明
     st.divider()
-    st.caption("💡 提示：请确保Cookie具有编辑商品的权限")
+    st.caption("💡 使用说明：\n"
+               "1. 从浏览器获取完整的Cookie字符串（包含 _m_h5_tk 和 sgcookie）\n"
+               "2. 粘贴Cookie并点击解析\n"
+               "3. 输入商品ID，点击获取当前图片确认商品\n"
+               "4. 选择新图片（支持URL或本地上传）\n"
+               "5. 点击开始修改商品图片")
 
 # ==================== 主程序 ====================
 def main():
