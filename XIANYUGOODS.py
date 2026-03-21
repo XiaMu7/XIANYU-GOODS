@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 自动获取c参数版（修复Cookie匹配）
+# XIANYUGOODS.py - 最终可用版
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode
 import os
 import random
 import string
@@ -13,14 +13,16 @@ import urllib3
 from PIL import Image
 import re
 
+# 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# 常量定义
 APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# 固定的headers（这些是设备相关的，一般不变）
+# 固定的headers（从你成功的请求中提取）
 FIXED_HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
     "accept": "application/json",
@@ -46,8 +48,6 @@ st.set_page_config(page_title="闲鱼商品图片修改工具", page_icon="📷"
 
 if 'auth_info' not in st.session_state:
     st.session_state.auth_info = {"cookies": {}, "m_h5_tk": "", "token": ""}
-if 'current_c_param' not in st.session_state:
-    st.session_state.current_c_param = ""
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
 
@@ -83,61 +83,6 @@ def update_auth_from_cookie(cookie_str: str) -> bool:
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-# ==================== 自动获取c参数 ====================
-
-def auto_get_c_param(item_id: str) -> str:
-    """自动从编辑页面获取c参数"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    token = st.session_state.auth_info.get("token", "")
-    
-    if not token and m_h5_tk:
-        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_id),
-    }
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
-    
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str)
-    
-    params = {
-        "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
-        "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
-        "dataType": "json", "timeout": "20000",
-        "api": "mtop.idle.wx.idleitem.editdetail", "_bx-m": "1",
-    }
-    
-    url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
-    
-    headers = FIXED_HEADERS.copy()
-    headers["Content-Type"] = "application/x-www-form-urlencoded"
-    headers["sgcookie"] = cookies.get('sgcookie', '')
-    
-    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    if result.get("data") and result["data"].get("redirectUrl"):
-        redirect_url = result["data"]["redirectUrl"]
-        match = re.search(r'c=([^&]+)', redirect_url)
-        if match:
-            return unquote(match.group(1))
-    
-    raise Exception("未能提取c参数")
-
-# ==================== 上传图片 ====================
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
@@ -180,8 +125,6 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         raise Exception("响应中没有图片URL")
     return image_url
 
-# ==================== 修改商品图片 ====================
-
 def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
@@ -190,41 +133,97 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
+    # 构建图片信息
     image_info = {"major": True, "widthSize": "640", "heightSize": "640", "type": 0, "url": image_url}
     
+    # 构建完整的请求数据（从你成功的请求中提取）
     data_obj = {
-        "utdid": FIXED_UTDID, "platform": "windows", "miniAppVersion": "9.9.9",
-        "imageInfoDOList": [image_info], "trendyGroupBuyInfo": {}, "canBorrow": "false",
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "imageInfoDOList": [image_info],
+        "trendyGroupBuyInfo": {},
+        "canBorrow": "false",
         "attribute_product": None,
         "redirectUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
         "simpleItem": "true",
         "itemPriceDTO": {"priceInCent": 150, "origPriceInCent": 200},
         "itemTimestampDTO": {},
         "categoryBarDTO": {"url": "https://market.m.taobao.com/app/idleFish-F2e/IdleFish4Weex/CateSecondary?wh_weex=true"},
-        "commonTagList": [], "canBargain": "true",
+        "commonTagList": [],
+        "canBargain": "true",
         "intellectSpuInfoDTO": {"defaultDes": "关联淘宝同款", "defaultTitle": "宝贝将被多人看到"},
         "jumpUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
-        "lockCpv": "false", "inputProperties": "", "uniqueCode": int(time.time() * 1000),
-        "bizActivityType": None, "itemStatus": None, "itemTypeStr": "b", "mtopTransformData": "{}",
-        "itemTopicParams": {"topicInfos": []}, "attribute_bizActivityType": None,
-        "itemLabelExtList": [{"channelCateId": "126854790", "isUserClick": "1", "labelType": "common",
-                              "from": "newPublishChoice", "text": "猫咪", "propertyId": "-10000",
-                              "properties": "-10000##分类:126854790##猫咪"}],
+        "lockCpv": "false",
+        "inputProperties": "",
+        "uniqueCode": int(time.time() * 1000),
+        "bizActivityType": None,
+        "itemStatus": None,
+        "itemTypeStr": "b",
+        "mtopTransformData": "{}",
+        "itemTopicParams": {"topicInfos": []},
+        "attribute_bizActivityType": None,
+        "itemLabelExtList": [
+            {
+                "channelCateId": "126854790",
+                "isUserClick": "1",
+                "labelType": "common",
+                "from": "newPublishChoice",
+                "text": "猫咪",
+                "propertyId": "-10000",
+                "properties": "-10000##分类:126854790##猫咪"
+            }
+        ],
         "itemToBuyDTO": None,
-        "itemAddrDTO": {"area": "天长市", "city": "滁州", "poiName": "安徽睿弘环保科技有限公司",
-                        "divisionId": "341181", "gps": "32.662261,118.935768", "poiId": "B0GD0A7HZL", "prov": "安徽"},
-        "textLabelList": [], "defaultPrice": False, "trendyFache": {}, "userRightsProtocols": [],
-        "quantity": "1", "itemSkuExtra": {}, "supportBargainPrice": "true", "defaultPicUrl": "false",
-        "userId": "0", "tags": [], "hideProSwitcher": "false", "itemId": str(item_id),
-        "freebies": "false", "itemFrom": "wechat", "itemTableMap": {},
-        "itemTextDTO": {"titleDescSeparate": "false", "descPath": "desc/icoss!01033424722209!11516426499",
-                        "title": "哈哈哈", "desc": "\n感兴趣的话点“我想要”和我私聊吧～",
-                        "wlDescription": "哈哈哈哈哈哈哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～"},
-        "stuffStatus": "9", "attribute_biz_line": "normalbuynow",
-        "itemPostFeeDTO": {"canFreeShipping": "false", "onlyTakeSelf": "false", "supportFreight": "false",
-                           "idleTemplateId": "0", "templateId": "0", "postPriceInCent": 0},
-        "itemCatDTO": {"catId": "50025452", "catName": "猫咪", "tbCatId": "50016383", "channelCatId": "126854790"},
-        "hideBid": "false", "properties": "15808291:60465429"
+        "itemAddrDTO": {
+            "area": "天长市",
+            "city": "滁州",
+            "poiName": "安徽睿弘环保科技有限公司",
+            "divisionId": "341181",
+            "gps": "32.662261,118.935768",
+            "poiId": "B0GD0A7HZL",
+            "prov": "安徽"
+        },
+        "textLabelList": [],
+        "defaultPrice": False,
+        "trendyFache": {},
+        "userRightsProtocols": [],
+        "quantity": "1",
+        "itemSkuExtra": {},
+        "supportBargainPrice": "true",
+        "defaultPicUrl": "false",
+        "userId": "0",
+        "tags": [],
+        "hideProSwitcher": "false",
+        "itemId": str(item_id),
+        "freebies": "false",
+        "itemFrom": "wechat",
+        "itemTableMap": {},
+        "itemTextDTO": {
+            "titleDescSeparate": "false",
+            "descPath": "desc/icoss!01033424722209!11516426499",
+            "title": "哈哈哈",
+            "desc": "\n感兴趣的话点“我想要”和我私聊吧～",
+            "wlDescription": "哈哈哈哈哈哈哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～"
+        },
+        "stuffStatus": "9",
+        "attribute_biz_line": "normalbuynow",
+        "itemPostFeeDTO": {
+            "canFreeShipping": "false",
+            "onlyTakeSelf": "false",
+            "supportFreight": "false",
+            "idleTemplateId": "0",
+            "templateId": "0",
+            "postPriceInCent": 0
+        },
+        "itemCatDTO": {
+            "catId": "50025452",
+            "catName": "猫咪",
+            "tbCatId": "50016383",
+            "channelCatId": "126854790"
+        },
+        "hideBid": "false",
+        "properties": "15808291:60465429"
     }
     
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
@@ -233,9 +232,18 @@ def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
     sign = calc_sign(token, t, APP_KEY, data_str)
     
     params = {
-        "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign, "c": c_param,
-        "v": "1.0", "type": "originaljson", "accountSite": "xianyu", "dataType": "json",
-        "timeout": "20000", "api": "mtop.idle.wx.idleitem.edit", "_bx-m": "1",
+        "jsv": "2.4.12",
+        "appKey": APP_KEY,
+        "t": t,
+        "sign": sign,
+        "c": c_param,
+        "v": "1.0",
+        "type": "originaljson",
+        "accountSite": "xianyu",
+        "dataType": "json",
+        "timeout": "20000",
+        "api": "mtop.idle.wx.idleitem.edit",
+        "_bx-m": "1",
     }
     
     url = f"{BASE_URL_EDIT}?{urlencode(params)}"
@@ -300,18 +308,12 @@ def main():
     st.header("📦 商品信息")
     item_id = st.text_input("商品ID", value="1033424722209")
     
-    if st.button("🔄 自动获取c参数", use_container_width=True):
-        try:
-            with st.spinner("获取c参数中..."):
-                c_param = auto_get_c_param(item_id)
-                st.session_state.current_c_param = c_param
-                st.success(f"✅ c参数获取成功")
-                st.info(f"c参数: {c_param[:80]}...")
-        except Exception as e:
-            st.error(f"获取失败: {str(e)}")
-    
-    if st.session_state.current_c_param:
-        st.success("✅ c参数已就绪")
+    st.info("💡 请在浏览器中进入商品编辑页面，从URL中复制c参数")
+    c_param_input = st.text_input(
+        "c参数",
+        placeholder="例如: 779b2ca8c1be888974d5819c4993c833_1774081393421;ad5680b748b5fa2cc2acaf0da35f03f0",
+        value="779b2ca8c1be888974d5819c4993c833_1774081393421;ad5680b748b5fa2cc2acaf0da35f03f0"
+    )
     
     st.divider()
     
@@ -345,8 +347,8 @@ def main():
             st.error("❌ 请输入商品ID")
         elif not new_image_data:
             st.error("❌ 请先选择图片")
-        elif not st.session_state.current_c_param:
-            st.error("❌ 请先获取c参数")
+        elif not c_param_input:
+            st.error("❌ 请输入c参数")
         else:
             try:
                 with st.spinner("处理中..."):
@@ -359,7 +361,7 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param)
+                    result = edit_item_image(item_id, final_url, c_param_input)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
