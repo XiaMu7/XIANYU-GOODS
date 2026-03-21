@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 修复Cookie解析
+# XIANYUGOODS.py - 最终修复版（确保token正确传递）
 import streamlit as st
 import hashlib
 import json
@@ -69,10 +69,8 @@ if 'auth_parsed' not in st.session_state:
 # ==================== 解析Cookie ====================
 
 def parse_cookie_string(cookie_str: str) -> dict:
-    """解析cookie字符串为字典"""
     cookies = {}
     try:
-        # 先清理字符串
         cookie_str = cookie_str.strip()
         items = cookie_str.split(';')
         for item in items:
@@ -85,23 +83,23 @@ def parse_cookie_string(cookie_str: str) -> dict:
     return cookies
 
 def update_auth_from_cookie(cookie_str: str) -> bool:
-    """从Cookie更新认证信息"""
     cookies = parse_cookie_string(cookie_str)
     
     if not cookies:
-        st.error("Cookie为空")
         return False
     
     st.session_state.auth_info["cookies"] = cookies
-    
-    # 打印所有cookie keys用于调试
-    st.info(f"Cookie keys: {list(cookies.keys())}")
     
     # 提取_m_h5_tk
     if '_m_h5_tk' in cookies:
         m_h5_tk = cookies['_m_h5_tk']
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
-        st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+        # 提取token（下划线前面的部分）
+        if '_' in m_h5_tk:
+            token = m_h5_tk.split('_')[0]
+            st.session_state.auth_info["token"] = token
+        else:
+            st.session_state.auth_info["token"] = m_h5_tk
         st.session_state.auth_parsed = True
         return True
     else:
@@ -120,8 +118,15 @@ def get_full_edit_data(item_id: str) -> dict:
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
     
-    if not token and m_h5_tk:
-        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    # 确保token不为空
+    if not token:
+        if '_' in m_h5_tk:
+            token = m_h5_tk.split('_')[0]
+        else:
+            token = m_h5_tk
+    
+    if not token:
+        raise Exception("token为空，请检查Cookie")
     
     st.info(f"使用的token: {token}")
     st.info(f"使用的_m_h5_tk: {m_h5_tk}")
@@ -141,7 +146,7 @@ def get_full_edit_data(item_id: str) -> dict:
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    sign = calc_sign(token, t, APP_KEY, data_str)
     
     params = {
         "jsv": "2.4.12",
@@ -191,8 +196,14 @@ def get_c_param(item_id: str) -> str:
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
     
-    if not token and m_h5_tk:
-        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    if not token:
+        if '_' in m_h5_tk:
+            token = m_h5_tk.split('_')[0]
+        else:
+            token = m_h5_tk
+    
+    if not token:
+        raise Exception("token为空")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -206,7 +217,7 @@ def get_c_param(item_id: str) -> str:
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    sign = calc_sign(token, t, APP_KEY, data_str)
     
     params = {
         "jsv": "2.4.12",
@@ -321,10 +332,8 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
 # ==================== 构建编辑数据 ====================
 
 def build_edit_data(item_detail: dict, new_image_url: str) -> dict:
-    """从商品详情构建编辑数据，替换图片URL"""
     item_data = item_detail.get("data", {}).get("itemDO", {})
     
-    # 构建图片信息
     image_info = {
         "major": True,
         "type": 0,
@@ -333,7 +342,6 @@ def build_edit_data(item_detail: dict, new_image_url: str) -> dict:
         "heightSize": "640"
     }
     
-    # 构建完整的编辑数据
     edit_data = {
         "utdid": FIXED_UTDID,
         "platform": "windows",
@@ -363,13 +371,15 @@ def build_edit_data(item_detail: dict, new_image_url: str) -> dict:
 # ==================== 修改商品图片 ====================
 
 def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict) -> dict:
-    """修改商品图片"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
     
-    if not token and m_h5_tk:
-        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    if not token:
+        if '_' in m_h5_tk:
+            token = m_h5_tk.split('_')[0]
+        else:
+            token = m_h5_tk
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -377,7 +387,7 @@ def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict)
     data_str = json.dumps(edit_data, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    sign = calc_sign(token, t, APP_KEY, data_str)
     
     params = {
         "jsv": "2.4.12",
@@ -545,7 +555,6 @@ def main():
         else:
             try:
                 with st.spinner("处理中..."):
-                    # 上传图片
                     if new_image_data["type"] == "url":
                         img_bytes, img_name, img_mime = download_image_from_url(new_image_data["value"])
                         final_url = upload_image(img_bytes, img_name, img_mime)
@@ -555,10 +564,8 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    # 构建编辑数据
                     edit_data = build_edit_data(st.session_state.full_edit_data, final_url)
                     
-                    # 修改商品图片
                     result = edit_item_image(item_id, final_url, st.session_state.current_c_param, edit_data)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
@@ -571,14 +578,6 @@ def main():
                             st.json(result)
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
-    
-    st.divider()
-    st.caption("💡 使用步骤：\n"
-               "1. 解析Cookie（会显示token和_m_h5_tk）\n"
-               "2. 点击'获取商品完整数据'获取当前商品所有信息\n"
-               "3. 点击'获取c参数'获取新的c参数\n"
-               "4. 选择新图片\n"
-               "5. 点击开始修改")
 
 if __name__ == "__main__":
     main()
