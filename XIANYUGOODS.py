@@ -1,378 +1,370 @@
-# XIANYUGOODS.py - 最终可用版
-import streamlit as st
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import hashlib
 import json
+import mimetypes
 import time
-from urllib.parse import urlencode
-import os
-import random
-import string
-import io
-import requests
-import urllib3
-from PIL import Image
+import sys
 import re
+import urllib.parse
+from pathlib import Path
+from urllib.parse import urlparse, urlencode, parse_qs
 
-# 禁用SSL警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import requests
 
-# 常量定义
+API = "mtop.idle.wx.idleitem.edit"
 APP_KEY = "12574478"
-UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
-BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
-FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
+BASE_URL = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/"
 
-# 固定的headers（从你成功的请求中提取）
-FIXED_HEADERS = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
-    "accept": "application/json",
-    "referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    "origin": "https://servicewechat.com",
-    "x-tap": "wx",
-    "xweb_xhr": "1",
-    "sec-fetch-site": "cross-site",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-dest": "empty",
-    "accept-language": "zh-CN,zh;q=0.9",
-    "priority": "u=1, i",
-    "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
-    "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
-    "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
-}
-
+# 会话对象，用于保持cookie
 session = requests.Session()
-session.verify = False
-session.timeout = 60
 
-st.set_page_config(page_title="闲鱼商品图片修改工具", page_icon="📷", layout="wide")
 
-if 'auth_info' not in st.session_state:
-    st.session_state.auth_info = {"cookies": {}, "m_h5_tk": "", "token": ""}
-if 'auth_parsed' not in st.session_state:
-    st.session_state.auth_parsed = False
-
-def parse_cookie_string(cookie_str: str) -> dict:
-    cookies = {}
-    try:
-        items = cookie_str.split(';')
-        for item in items:
+class XianyuItemUpdater:
+    """闲鱼商品信息更新器"""
+    
+    def __init__(self, cookies_str=None, utdid=None):
+        """
+        初始化更新器
+        
+        Args:
+            cookies_str: Cookie字符串，格式如 "key1=value1; key2=value2"
+            utdid: 设备标识，从抓包中获取
+        """
+        self.cookies = {}
+        self.utdid = utdid
+        self.m_h5_tk = None
+        self.token = None
+        
+        # 解析cookie字符串
+        if cookies_str:
+            self.parse_cookies(cookies_str)
+        
+        # 设置默认headers
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+            "x-tap": "wx",
+        }
+        
+        # 从cookies中提取_m_h5_tk
+        if "_m_h5_tk" in self.cookies:
+            self.m_h5_tk = self.cookies["_m_h5_tk"]
+            self.token = self.m_h5_tk.split('_')[0] if '_' in self.m_h5_tk else self.m_h5_tk
+    
+    def parse_cookies(self, cookies_str):
+        """解析Cookie字符串"""
+        for item in cookies_str.split(';'):
             item = item.strip()
             if '=' in item:
                 key, value = item.split('=', 1)
-                cookies[key.strip()] = value.strip()
-    except Exception as e:
-        st.error(f"Cookie解析失败: {str(e)}")
-    return cookies
+                self.cookies[key.strip()] = value.strip()
+    
+    def set_headers_from_dict(self, headers_dict):
+        """从字典设置headers"""
+        for key, value in headers_dict.items():
+            self.headers[key] = value
+    
+    def calc_sign(self, token, t, app_key, data_str):
+        """计算签名"""
+        raw = f"{token}&{t}&{app_key}&{data_str}"
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+    
+    def update_item_image(self, item_id, image_url, retry_count=0):
+        """
+        更新商品图片
+        
+        Args:
+            item_id: 商品ID
+            image_url: 图片URL
+            retry_count: 重试次数
+        
+        Returns:
+            更新结果
+        """
+        if not self.m_h5_tk:
+            raise ValueError("未找到 _m_h5_tk cookie")
+        
+        if not self.utdid:
+            raise ValueError("未提供 utdid")
+        
+        # 构建请求数据
+        data_obj = {
+            "utdid": self.utdid,
+            "platform": "windows",
+            "miniAppVersion": "9.9.9",
+            "imageInfoDOList": [
+                {
+                    "major": True,
+                    "type": 0,
+                    "url": image_url,
+                    "widthSize": "640",
+                    "heightSize": "640"
+                }
+            ],
+            "itemId": item_id,
+            "itemFrom": "wechat",
+            "simpleItem": "true"
+        }
+        
+        data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+        
+        t = str(int(time.time() * 1000))
+        sign = self.calc_sign(self.token, t, APP_KEY, data_str)
+        
+        # 构建请求参数
+        params = {
+            "jsv": "2.4.12",
+            "appKey": APP_KEY,
+            "t": t,
+            "sign": sign,
+            "v": "1.0",
+            "type": "originaljson",
+            "accountSite": "xianyu",
+            "dataType": "json",
+            "timeout": "20000",
+            "api": API,
+            "_bx-m": "1",
+        }
+        
+        # 准备cookies
+        cookies = self.cookies.copy()
+        cookies["_m_h5_tk"] = self.m_h5_tk
+        
+        print(f"\n发送更新请求...")
+        print(f"商品ID: {item_id}")
+        print(f"图片URL: {image_url}")
+        
+        # 发送请求
+        response = session.post(
+            f"{BASE_URL}?{urlencode(params)}",
+            headers=self.headers,
+            cookies=cookies,
+            data={"data": data_str},
+            timeout=20,
+        )
+        
+        print(f"响应状态码: {response.status_code}")
+        
+        # 检查并更新token
+        token_updated = False
+        if '_m_h5_tk' in response.cookies:
+            new_m_h5_tk = response.cookies['_m_h5_tk']
+            if new_m_h5_tk != self.m_h5_tk:
+                print(f"发现新的 _m_h5_tk: {new_m_h5_tk}")
+                print(f"自动更新当前token")
+                self.m_h5_tk = new_m_h5_tk
+                self.token = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
+                self.cookies['_m_h5_tk'] = new_m_h5_tk
+                token_updated = True
+        
+        result = response.json()
+        
+        # 如果返回非法令牌且没有重试过，并且token被更新了，则自动重试一次
+        if result.get("ret") and "FAIL_SYS_TOKEN_ILLEGAL" in str(result["ret"]) and retry_count == 0 and token_updated:
+            print("\n检测到新token，自动重试一次...")
+            time.sleep(1)
+            return self.update_item_image(item_id, image_url, retry_count=1)
+        
+        return result
+    
+    def upload_image_from_url(self, image_url):
+        """
+        从URL上传图片到闲鱼服务器
+        
+        Args:
+            image_url: 图片URL
+        
+        Returns:
+            上传后的图片URL
+        """
+        print(f"下载图片: {image_url}")
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+        content = response.content
+        
+        if not content:
+            raise RuntimeError("下载的图片为空")
+        
+        parsed = urlparse(image_url)
+        raw_name = Path(parsed.path).name or "remote.jpg"
+        if "." not in raw_name:
+            raw_name = f"{raw_name}.jpg"
+        
+        mime = response.headers.get("Content-Type", "").split(";")[0].strip()
+        if not mime:
+            mime = mimetypes.guess_type(raw_name)[0] or "image/jpeg"
+        
+        print(f"下载完成: {len(content)} bytes, MIME: {mime}")
+        
+        return self.upload_bytes(raw_name, content, mime)
+    
+    def upload_bytes(self, file_name, file_bytes, mime):
+        """
+        上传图片字节流
+        
+        Args:
+            file_name: 文件名
+            file_bytes: 文件字节流
+            mime: MIME类型
+        
+        Returns:
+            上传后的图片URL
+        """
+        upload_url = "https://stream-upload.goofish.com/api/upload.api"
+        
+        cookies = self.cookies.copy()
+        if self.m_h5_tk:
+            cookies["_m_h5_tk"] = self.m_h5_tk
+        
+        files = {
+            "file": (file_name, file_bytes, mime),
+        }
+        
+        data = {
+            "content-type": "multipart/form-data",
+            "appkey": "fleamarket",
+            "bizCode": "fleamarket",
+            "floderId": "0",
+            "name": "fileFromAlbum",
+        }
+        
+        params = {
+            "floderId": "0",
+            "appkey": "fleamarket",
+            "_input_charset": "utf-8",
+        }
+        
+        print(f"上传文件到: {upload_url}")
+        
+        response = session.post(
+            upload_url,
+            params=params,
+            headers=self.headers,
+            cookies=cookies,
+            data=data,
+            files=files,
+            timeout=30,
+        )
+        
+        response.raise_for_status()
+        body = response.json()
+        
+        if not body.get("success"):
+            raise RuntimeError(f"上传失败: {body}")
+        
+        image_url = body.get("object", {}).get("url")
+        if not image_url:
+            raise RuntimeError(f"上传响应缺少object.url: {body}")
+        
+        return image_url
 
-def update_auth_from_cookie(cookie_str: str) -> bool:
-    cookies = parse_cookie_string(cookie_str)
-    if not cookies:
-        return False
-    st.session_state.auth_info["cookies"] = cookies
-    if '_m_h5_tk' in cookies:
-        m_h5_tk = cookies['_m_h5_tk']
-        st.session_state.auth_info["m_h5_tk"] = m_h5_tk
-        if '_' in m_h5_tk:
-            st.session_state.auth_info["token"] = m_h5_tk.split('_')[0]
-        else:
-            st.session_state.auth_info["token"] = m_h5_tk
-        st.session_state.auth_parsed = True
-        return True
-    return False
-
-def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
-    raw = f"{token}&{t}&{app_key}&{data_str}"
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    boundary = '----WebKitFormBoundary' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
-    body_parts = []
-    
-    fields = {'name': 'fileFromAlbum', 'appkey': 'fleamarket', 'bizCode': 'fleamarket', 'folderId': '0'}
-    for key, value in fields.items():
-        body_parts.append(f'--{boundary}')
-        body_parts.append(f'Content-Disposition: form-data; name="{key}"')
-        body_parts.append('')
-        body_parts.append(str(value))
-    
-    body_parts.append(f'--{boundary}')
-    body_parts.append(f'Content-Disposition: form-data; name="file"; filename="{file_name}"')
-    body_parts.append(f'Content-Type: {mime}')
-    body_parts.append('')
-    
-    body = '\r\n'.join(body_parts).encode() + b'\r\n' + file_bytes + f'\r\n--{boundary}--\r\n'.encode()
-    
-    upload_headers = FIXED_HEADERS.copy()
-    upload_headers['Content-Type'] = f'multipart/form-data; boundary={boundary}'
-    upload_headers['sgcookie'] = cookies.get('sgcookie', '')
-    
-    params = {'folderId': '0', 'appkey': 'fleamarket', '_input_charset': 'utf-8'}
-    
-    response = session.post(UPLOAD_URL, params=params, headers=upload_headers, cookies=cookies, data=body, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"上传失败: HTTP {response.status_code}")
-    result = response.json()
-    if not result.get('success'):
-        raise Exception(f"上传失败: {result.get('message', '未知错误')}")
-    image_url = result.get('object', {}).get('url') or result.get('url')
-    if not image_url:
-        raise Exception("响应中没有图片URL")
-    return image_url
-
-def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    token = st.session_state.auth_info.get("token", "")
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    # 构建图片信息
-    image_info = {"major": True, "widthSize": "640", "heightSize": "640", "type": 0, "url": image_url}
-    
-    # 构建完整的请求数据（从你成功的请求中提取）
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "imageInfoDOList": [image_info],
-        "trendyGroupBuyInfo": {},
-        "canBorrow": "false",
-        "attribute_product": None,
-        "redirectUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
-        "simpleItem": "true",
-        "itemPriceDTO": {"priceInCent": 150, "origPriceInCent": 200},
-        "itemTimestampDTO": {},
-        "categoryBarDTO": {"url": "https://market.m.taobao.com/app/idleFish-F2e/IdleFish4Weex/CateSecondary?wh_weex=true"},
-        "commonTagList": [],
-        "canBargain": "true",
-        "intellectSpuInfoDTO": {"defaultDes": "关联淘宝同款", "defaultTitle": "宝贝将被多人看到"},
-        "jumpUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
-        "lockCpv": "false",
-        "inputProperties": "",
-        "uniqueCode": int(time.time() * 1000),
-        "bizActivityType": None,
-        "itemStatus": None,
-        "itemTypeStr": "b",
-        "mtopTransformData": "{}",
-        "itemTopicParams": {"topicInfos": []},
-        "attribute_bizActivityType": None,
-        "itemLabelExtList": [
-            {
-                "channelCateId": "126854790",
-                "isUserClick": "1",
-                "labelType": "common",
-                "from": "newPublishChoice",
-                "text": "猫咪",
-                "propertyId": "-10000",
-                "properties": "-10000##分类:126854790##猫咪"
-            }
-        ],
-        "itemToBuyDTO": None,
-        "itemAddrDTO": {
-            "area": "天长市",
-            "city": "滁州",
-            "poiName": "安徽睿弘环保科技有限公司",
-            "divisionId": "341181",
-            "gps": "32.662261,118.935768",
-            "poiId": "B0GD0A7HZL",
-            "prov": "安徽"
-        },
-        "textLabelList": [],
-        "defaultPrice": False,
-        "trendyFache": {},
-        "userRightsProtocols": [],
-        "quantity": "1",
-        "itemSkuExtra": {},
-        "supportBargainPrice": "true",
-        "defaultPicUrl": "false",
-        "userId": "0",
-        "tags": [],
-        "hideProSwitcher": "false",
-        "itemId": str(item_id),
-        "freebies": "false",
-        "itemFrom": "wechat",
-        "itemTableMap": {},
-        "itemTextDTO": {
-            "titleDescSeparate": "false",
-            "descPath": "desc/icoss!01033424722209!11516426499",
-            "title": "哈哈哈",
-            "desc": "\n感兴趣的话点“我想要”和我私聊吧～",
-            "wlDescription": "哈哈哈哈哈哈哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～"
-        },
-        "stuffStatus": "9",
-        "attribute_biz_line": "normalbuynow",
-        "itemPostFeeDTO": {
-            "canFreeShipping": "false",
-            "onlyTakeSelf": "false",
-            "supportFreight": "false",
-            "idleTemplateId": "0",
-            "templateId": "0",
-            "postPriceInCent": 0
-        },
-        "itemCatDTO": {
-            "catId": "50025452",
-            "catName": "猫咪",
-            "tbCatId": "50016383",
-            "channelCatId": "126854790"
-        },
-        "hideBid": "false",
-        "properties": "15808291:60465429"
-    }
-    
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
-    
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str)
-    
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "c": c_param,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.idle.wx.idleitem.edit",
-        "_bx-m": "1",
-    }
-    
-    url = f"{BASE_URL_EDIT}?{urlencode(params)}"
-    
-    headers = FIXED_HEADERS.copy()
-    headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    headers['sgcookie'] = cookies.get('sgcookie', '')
-    
-    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    return response.json()
-
-def download_image_from_url(url: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    response = requests.get(url, headers=headers, timeout=60, verify=False)
-    response.raise_for_status()
-    content = response.content
-    if len(content) == 0:
-        raise Exception("文件为空")
-    parsed = urllib3.util.parse_url(url)
-    file_name = os.path.basename(parsed.path or "")
-    if not file_name or '.' not in file_name:
-        file_name = f"image_{int(time.time())}.jpg"
-    content_type = response.headers.get('Content-Type', '')
-    mime = content_type.split(';')[0].strip() or 'image/jpeg'
-    return content, file_name, mime
-
-def process_uploaded_file(uploaded_file):
-    try:
-        image = Image.open(io.BytesIO(uploaded_file.getvalue()))
-        return {"bytes": uploaded_file.getvalue(), "name": uploaded_file.name,
-                "mime": uploaded_file.type or 'image/jpeg', "width": image.width, "height": image.height}
-    except Exception as e:
-        st.error(f"无法解析图片: {str(e)}")
-        return None
 
 def main():
-    st.title("📷 闲鱼商品图片修改工具")
+    """主函数"""
+    print("=" * 50)
+    print("闲鱼商品图片更新工具")
+    print("=" * 50)
     
-    st.header("🔑 认证信息配置")
+    # 获取商品ID
+    print("\n请输入要修改的闲鱼商品ID：")
+    print("（可以在商品详情页URL中找到，如 itemId=1033424722209）")
+    item_id = input("商品ID: ").strip()
     
-    cookie_input = st.text_area(
-        "Cookie",
-        height=150,
-        placeholder="粘贴完整的Cookie字符串...",
-        value="cookie2=1a1dc873b657af0c33ff47d8c27e7742; cna=OPA7Ivhd/iECAXAaAnFXYRhf; _samesite_flag_=true; t=6d0f3df81668bb7846291186b5a28502; _tb_token_=79bd1113ebe57; tracknick=123%E5%88%98%E5%B0%8F%E5%9D%8F; unb=2886592894; xlly_s=1; mtop_partitioned_detect=1; _m_h5_tk=ec8694d86518d128448f0b819d3f089b_1774091684488; _m_h5_tk_enc=a809f19be94bf748147fc9d411b4db5c; sgcookie=E100tUNLOsTQY33%2FL0jZKmAFrBufJwT6LV4TzgAGk4XXV3aqO6T0GuMdqd6Q37lpv0QJdWmIyqDTU%2Fl4zu1FXv2HhBcoCnx4zSC24RNYRrxRGWw%3D; csg=c712c3e6"
-    )
+    if not item_id:
+        print("错误：商品ID不能为空")
+        sys.exit(1)
     
-    if st.button("解析Cookie", use_container_width=True):
-        if update_auth_from_cookie(cookie_input):
-            st.success("✅ Cookie解析成功")
-            st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
+    # 获取图片URL
+    print("\n请输入新的图片URL：")
+    print("支持格式：https://xxx.jpg 或本地文件路径")
+    image_input = input("图片URL/路径: ").strip()
     
-    if not st.session_state.auth_parsed:
-        st.warning("⚠️ 请先粘贴Cookie并解析")
-        return
+    if not image_input:
+        print("错误：图片URL不能为空")
+        sys.exit(1)
     
-    st.divider()
+    # 获取Cookie
+    print("\n请输入Cookie字符串：")
+    print("（从浏览器或抓包工具中复制，格式如：cookie2=xxx; _m_h5_tk=xxx; ...）")
+    print("提示：复制完整的Cookie字符串，包含所有必要的认证信息")
+    cookies_str = input("Cookie: ").strip()
     
-    st.header("📦 商品信息")
-    item_id = st.text_input("商品ID", value="1033424722209")
+    if not cookies_str:
+        print("警告：未提供Cookie，将使用默认值（可能导致认证失败）")
     
-    st.info("💡 请在浏览器中进入商品编辑页面，从URL中复制c参数")
-    c_param_input = st.text_input(
-        "c参数",
-        placeholder="例如: 779b2ca8c1be888974d5819c4993c833_1774081393421;ad5680b748b5fa2cc2acaf0da35f03f0",
-        value="779b2ca8c1be888974d5819c4993c833_1774081393421;ad5680b748b5fa2cc2acaf0da35f03f0"
-    )
+    # 获取utdid
+    print("\n请输入utdid（从抓包中的data字段获取）：")
+    print("示例：v3UyIt1jJFECAXAaAnEns/UL")
+    utdid = input("utdid: ").strip()
     
-    st.divider()
+    if not utdid:
+        print("错误：utdid不能为空")
+        print("提示：请在抓包中找到请求中的data字段，提取utdid值")
+        sys.exit(1)
     
-    st.header("📤 新图片上传")
-    image_source = st.radio("选择图片来源", ["网络图片URL", "本地上传"], horizontal=True)
+    # 创建更新器
+    updater = XianyuItemUpdater(cookies_str=cookies_str, utdid=utdid)
     
-    new_image_data = None
+    # 可选：添加其他必要的headers
+    print("\n是否添加额外的headers？（可选，按回车跳过）")
+    extra_headers = input("headers (JSON格式，如 {\"bx-umidtoken\":\"xxx\"}): ").strip()
+    if extra_headers:
+        try:
+            headers_dict = json.loads(extra_headers)
+            updater.set_headers_from_dict(headers_dict)
+        except json.JSONDecodeError:
+            print("警告：headers格式错误，将跳过")
     
-    if image_source == "网络图片URL":
-        new_image_url = st.text_input("图片URL")
-        if new_image_url and st.button("预览新图片"):
-            try:
-                st.image(new_image_url, width=200)
-            except:
-                st.error("无法预览图片")
-        if new_image_url:
-            new_image_data = {"type": "url", "value": new_image_url}
-    else:
-        uploaded_file = st.file_uploader("选择图片文件", type=['png', 'jpg', 'jpeg', 'gif', 'webp'])
-        if uploaded_file:
-            img_info = process_uploaded_file(uploaded_file)
-            if img_info:
-                st.image(uploaded_file, width=200)
-                st.caption(f"{img_info['width']}x{img_info['height']}")
-                new_image_data = {"type": "file", "value": img_info}
-    
-    st.divider()
-    
-    if st.button("开始修改商品图片", type="primary", use_container_width=True):
-        if not item_id:
-            st.error("❌ 请输入商品ID")
-        elif not new_image_data:
-            st.error("❌ 请先选择图片")
-        elif not c_param_input:
-            st.error("❌ 请输入c参数")
+    try:
+        # 处理图片
+        print("\n" + "-" * 50)
+        print("处理图片...")
+        
+        # 判断是本地文件还是URL
+        if image_input.startswith(('http://', 'https://')):
+            # 如果是URL，直接使用
+            final_image_url = image_input
+            print(f"使用图片URL: {final_image_url}")
         else:
-            try:
-                with st.spinner("处理中..."):
-                    if new_image_data["type"] == "url":
-                        img_bytes, img_name, img_mime = download_image_from_url(new_image_data["value"])
-                        final_url = upload_image(img_bytes, img_name, img_mime)
-                    else:
-                        img_info = new_image_data["value"]
-                        final_url = upload_image(img_info["bytes"], img_info["name"], img_info["mime"])
-                    
-                    st.success(f"✅ 图片上传成功")
-                    
-                    result = edit_item_image(item_id, final_url, c_param_input)
-                    
-                    if result.get("ret") and "SUCCESS" in str(result["ret"]):
-                        st.success("✅ 商品图片修改成功！")
-                        st.balloons()
-                    else:
-                        error_msg = result.get("ret", ["未知错误"])[0]
-                        st.error(f"❌ 修改失败: {error_msg}")
-                        with st.expander("查看详细返回"):
-                            st.json(result)
-            except Exception as e:
-                st.error(f"❌ 修改失败: {str(e)}")
+            # 如果是本地文件，先上传
+            print(f"读取本地文件: {image_input}")
+            with open(image_input, 'rb') as f:
+                file_bytes = f.read()
+            
+            file_name = Path(image_input).name
+            mime = mimetypes.guess_type(file_name)[0] or "image/jpeg"
+            
+            final_image_url = updater.upload_bytes(file_name, file_bytes, mime)
+            print(f"上传成功: {final_image_url}")
+        
+        # 更新商品图片
+        print("\n" + "-" * 50)
+        print("更新商品图片...")
+        result = updater.update_item_image(item_id, final_image_url)
+        
+        # 输出结果
+        print("\n" + "-" * 50)
+        print("更新结果:")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        
+        if result.get("ret") and "SUCCESS" in str(result["ret"]):
+            print("\n✓ 商品图片更新成功！")
+        else:
+            print("\n✗ 商品图片更新失败，请检查返回信息")
+            
+    except FileNotFoundError:
+        print(f"\n✗ 错误：找不到本地文件 {image_input}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n✗ 错误: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
