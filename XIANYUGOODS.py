@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 闲鱼商品图片修改工具（修复版）
+# XIANYUGOODS.py - 闲鱼商品图片修改工具（带自动token更新）
 import streamlit as st
 import hashlib
 import json
@@ -55,6 +55,9 @@ if 'current_item_image' not in st.session_state:
 
 if 'current_m_h5_tk' not in st.session_state:
     st.session_state.current_m_h5_tk = ""
+
+if 'current_token' not in st.session_state:
+    st.session_state.current_token = ""
 
 # ==================== 从请求中提取信息 ====================
 
@@ -173,8 +176,6 @@ def extract_from_request(request_text: str) -> dict:
 
 def update_auth_info(request_text: str) -> bool:
     """从请求文本更新认证信息"""
-    global current_m_h5_tk
-    
     info = extract_from_request(request_text)
     
     if not info:
@@ -182,8 +183,26 @@ def update_auth_info(request_text: str) -> bool:
     
     st.session_state.auth_info = info
     st.session_state.current_m_h5_tk = info["m_h5_tk"]
+    st.session_state.current_token = info["token"]
     
     return True
+
+def update_token_from_response(response) -> bool:
+    """从响应中更新token"""
+    updated = False
+    
+    # 从cookies中提取新的_m_h5_tk
+    if '_m_h5_tk' in response.cookies:
+        new_m_h5_tk = response.cookies['_m_h5_tk']
+        if new_m_h5_tk != st.session_state.current_m_h5_tk:
+            st.session_state.current_m_h5_tk = new_m_h5_tk
+            st.session_state.current_token = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
+            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
+            st.session_state.auth_info['token'] = st.session_state.current_token
+            updated = True
+            print(f"✅ Token已更新: {st.session_state.current_token[:20]}...")
+    
+    return updated
 
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     """计算签名"""
@@ -192,10 +211,8 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
 
 # ==================== 图片上传 ====================
 
-def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
+def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int = 0) -> str:
     """上传图片到闲鱼服务器"""
-    global current_m_h5_tk
-    
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
@@ -259,10 +276,18 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         timeout=30
     )
     
+    # 更新token
+    update_token_from_response(response)
+    
     if response.status_code != 200:
         raise Exception(f"上传失败: HTTP {response.status_code}")
     
     result = response.json()
+    
+    # 如果token过期且未重试，则重试
+    if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]) and retry_count == 0:
+        print("Token过期，更新后重试上传...")
+        return upload_image(file_bytes, file_name, mime, retry_count=1)
     
     if not result.get('success'):
         raise Exception(f"上传失败: {result.get('message', '未知错误')}")
@@ -271,25 +296,55 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     if not image_url:
         raise Exception("响应中没有图片URL")
     
-    # 更新token
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != st.session_state.current_m_h5_tk:
-            st.session_state.current_m_h5_tk = new_m_h5_tk
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-    
     return image_url
 
 # ==================== 商品操作 ====================
 
-def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
+def make_request_with_retry(url: str, headers: dict, cookies: dict, data: dict, max_retries: int = 2) -> dict:
+    """带重试的请求函数"""
+    for attempt in range(max_retries):
+        try:
+            response = session.post(url, headers=headers, cookies=cookies, data=data, timeout=20)
+            
+            # 更新token
+            token_updated = update_token_from_response(response)
+            
+            if response.status_code != 200:
+                raise Exception(f"HTTP错误: {response.status_code}")
+            
+            result = response.json()
+            
+            # 检查token是否过期
+            if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]):
+                if attempt < max_retries - 1:
+                    print(f"Token过期，第{attempt + 1}次重试...")
+                    time.sleep(1)  # 等待1秒
+                    continue
+                else:
+                    raise Exception(f"Token过期且重试失败: {result.get('ret')}")
+            
+            return result
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"请求失败，第{attempt + 1}次重试: {e}")
+                time.sleep(1)
+                continue
+            else:
+                raise e
+    
+    raise Exception("请求失败，已达最大重试次数")
+
+def get_item_detail(item_id: str) -> dict:
     """获取商品详情"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
     m_h5_tk = st.session_state.current_m_h5_tk
-    token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    token = st.session_state.current_token
+    
+    if not token:
+        raise Exception("Token为空，请重新解析认证信息")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -344,40 +399,21 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
         if h in st.session_state.auth_info.get('headers', {}):
             headers[h] = st.session_state.auth_info['headers'][h]
     
-    response = session.post(
-        url,
-        headers=headers,
-        cookies=cookies,
-        data={"data": data_str},
-        timeout=20
-    )
-    
-    # 更新token
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != st.session_state.current_m_h5_tk:
-            st.session_state.current_m_h5_tk = new_m_h5_tk
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    # 如果token非法且有新token，重试一次
-    if result.get("ret") and "FAIL_SYS_TOKEN_ILLEGAL" in str(result["ret"]) and retry_count == 0:
-        return get_item_detail(item_id, retry_count=1)
+    # 使用带重试的请求
+    result = make_request_with_retry(url, headers, cookies, {"data": data_str})
     
     return result
 
-def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dict:
+def update_item_image(item_id: str, image_url: str) -> dict:
     """更新商品图片"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     
     # 使用当前的 _m_h5_tk
     m_h5_tk = st.session_state.current_m_h5_tk
-    token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    token = st.session_state.current_token
+    
+    if not token:
+        raise Exception("Token为空，请重新解析认证信息")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -431,30 +467,8 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
         if h in st.session_state.auth_info.get('headers', {}):
             headers[h] = st.session_state.auth_info['headers'][h]
     
-    response = session.post(
-        url,
-        headers=headers,
-        cookies=cookies,
-        data={"data": data_str},
-        timeout=20
-    )
-    
-    # 更新token
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != st.session_state.current_m_h5_tk:
-            st.session_state.current_m_h5_tk = new_m_h5_tk
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    # 如果token非法且有新token，重试一次
-    if result.get("ret") and "FAIL_SYS_TOKEN_ILLEGAL" in str(result["ret"]) and retry_count == 0:
-        return update_item_image(item_id, image_url, retry_count=1)
+    # 使用带重试的请求
+    result = make_request_with_retry(url, headers, cookies, {"data": data_str})
     
     return result
 
@@ -519,14 +533,14 @@ def main():
                 st.success("✅ 认证信息解析成功")
                 
                 # 显示解析结果
-                if st.session_state.auth_info.get("m_h5_tk"):
-                    st.info(f"✅ _m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:30]}...")
-                if st.session_state.auth_info.get("token"):
-                    st.info(f"✅ token: {st.session_state.auth_info['token'][:20]}...")
+                if st.session_state.current_m_h5_tk:
+                    st.info(f"✅ _m_h5_tk: {st.session_state.current_m_h5_tk[:50]}...")
+                if st.session_state.current_token:
+                    st.info(f"✅ token: {st.session_state.current_token[:20]}...")
                 if st.session_state.auth_info.get("utdid"):
                     st.info(f"✅ utdid: {st.session_state.auth_info['utdid']}")
                 if st.session_state.auth_info.get("c_param"):
-                    st.info(f"✅ c参数: {st.session_state.auth_info['c_param'][:30]}...")
+                    st.info(f"✅ c参数: {st.session_state.auth_info['c_param'][:50]}...")
             else:
                 st.error("❌ 解析失败，请检查格式")
     
