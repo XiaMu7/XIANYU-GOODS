@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 完整数据版（内置商品所有信息）
+# XIANYUGOODS.py - 自动更新c参数版
 import streamlit as st
 import hashlib
 import json
@@ -40,7 +40,7 @@ FIXED_HEADERS = {
     "mini-janus": "10%40%2Fqsjuf84JPeypLnnQ%2FIJ3QSm%2Ffm8RUgaD2GwN9Aqyf8Ld9jP1SXppLDPkEUKp57IuDGIaqlQOPaqiBF%3D",
 }
 
-# ==================== 内置的完整商品数据（从你的请求中提取）====================
+# ==================== 内置的完整商品数据 ====================
 FIXED_ITEM_DATA = {
     "itemId": "1033424722209",
     "utdid": FIXED_UTDID,
@@ -106,8 +106,6 @@ FIXED_ITEM_DATA = {
 # 全局session
 session = requests.Session()
 session.verify = False
-
-# 增加超时时间
 session.timeout = 60
 
 # 页面配置
@@ -124,6 +122,8 @@ if 'auth_info' not in st.session_state:
         "m_h5_tk": "",
         "token": "",
     }
+if 'current_c_param' not in st.session_state:
+    st.session_state.current_c_param = ""
 
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
@@ -131,7 +131,6 @@ if 'auth_parsed' not in st.session_state:
 # ==================== 解析Cookie ====================
 
 def parse_cookie_string(cookie_str: str) -> dict:
-    """解析cookie字符串为字典"""
     cookies = {}
     try:
         items = cookie_str.split(';')
@@ -145,42 +144,33 @@ def parse_cookie_string(cookie_str: str) -> dict:
     return cookies
 
 def update_auth_from_cookie(cookie_str: str) -> bool:
-    """从Cookie更新认证信息"""
     cookies = parse_cookie_string(cookie_str)
-    
     if not cookies:
         return False
     
     st.session_state.auth_info["cookies"] = cookies
-    
-    # 提取_m_h5_tk
     if '_m_h5_tk' in cookies:
         m_h5_tk = cookies['_m_h5_tk']
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
         st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
         st.session_state.auth_parsed = True
         return True
-    
     return False
 
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
-    """计算签名"""
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 # ==================== 上传图片 ====================
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
-    """上传图片到闲鱼服务器"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 构建multipart数据
     boundary = '----WebKitFormBoundary' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
-    
     body_parts = []
     
     fields = {
@@ -222,23 +212,12 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         '_input_charset': 'utf-8',
     }
     
-    try:
-        response = session.post(
-            UPLOAD_URL,
-            params=params,
-            headers=upload_headers,
-            cookies=cookies,
-            data=body,
-            timeout=60
-        )
-    except requests.exceptions.Timeout:
-        raise Exception("上传超时，请检查网络")
+    response = session.post(UPLOAD_URL, params=params, headers=upload_headers, cookies=cookies, data=body, timeout=60)
     
     if response.status_code != 200:
         raise Exception(f"上传失败: HTTP {response.status_code}")
     
     result = response.json()
-    
     if not result.get('success'):
         raise Exception(f"上传失败: {result.get('message', '未知错误')}")
     
@@ -248,10 +227,10 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     
     return image_url
 
-# ==================== 修改商品图片（使用完整内置数据）====================
+# ==================== 修改商品图片（自动更新c参数）====================
 
-def edit_item_image_with_full_data(item_id: str, image_url: str) -> dict:
-    """修改商品图片 - 使用内置的完整商品数据"""
+def edit_item_image_with_retry(item_id: str, image_url: str, max_retries: int = 3) -> dict:
+    """修改商品图片 - 自动重试并更新c参数"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -262,10 +241,13 @@ def edit_item_image_with_full_data(item_id: str, image_url: str) -> dict:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 使用内置的c参数
-    c_param = "a7aae20aaaf4c186b06debcc2f7e7854_1774073270430;62452af9c4e6371c500da3b3df1f5913"
+    # 使用当前的c参数
+    c_param = st.session_state.current_c_param
+    if not c_param:
+        # 如果没有c参数，使用一个初始的
+        c_param = "a7aae20aaaf4c186b06debcc2f7e7854_1774073270430;62452af9c4e6371c500da3b3df1f5913"
     
-    # 构建完整的商品数据（复制内置数据并替换图片URL）
+    # 构建完整的商品数据
     image_info = {
         "major": True,
         "type": 0,
@@ -274,7 +256,6 @@ def edit_item_image_with_full_data(item_id: str, image_url: str) -> dict:
         "heightSize": "640"
     }
     
-    # 构建完整的请求数据（从内置数据复制所有字段）
     data_obj = {
         "utdid": FIXED_UTDID,
         "platform": "windows",
@@ -330,65 +311,76 @@ def edit_item_image_with_full_data(item_id: str, image_url: str) -> dict:
     
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    for attempt in range(max_retries):
+        t = str(int(time.time() * 1000))
+        sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+        
+        params = {
+            "jsv": "2.4.12",
+            "appKey": APP_KEY,
+            "t": t,
+            "sign": sign,
+            "c": c_param,
+            "v": "1.0",
+            "type": "originaljson",
+            "accountSite": "xianyu",
+            "dataType": "json",
+            "timeout": "20000",
+            "api": "mtop.idle.wx.idleitem.edit",
+            "_bx-m": "1",
+        }
+        
+        url = f"{BASE_URL_EDIT}?{urlencode(params)}"
+        
+        headers = {
+            "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+            "sgcookie": cookies.get('sgcookie', ''),
+            "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
+            "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
+            "x-tap": "wx",
+            "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
+        }
+        
+        st.info(f"尝试 {attempt + 1}/{max_retries}，使用c参数: {c_param[:50]}...")
+        
+        response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
+        
+        if response.status_code != 200:
+            raise Exception(f"HTTP错误: {response.status_code}")
+        
+        result = response.json()
+        
+        # 检查是否成功
+        if result.get("ret") and "SUCCESS" in str(result["ret"]):
+            return result
+        
+        # 检查是否返回了新的c参数
+        if result.get("c"):
+            new_c = result["c"]
+            if new_c != c_param:
+                st.warning(f"检测到新c参数，自动更新并重试...")
+                c_param = new_c
+                st.session_state.current_c_param = new_c
+                continue  # 用新c参数重试
+        
+        # 如果是其他错误，返回错误
+        if attempt == max_retries - 1:
+            return result
+        else:
+            st.warning(f"请求失败: {result.get('ret', ['未知错误'])[0]}，等待后重试...")
+            time.sleep(2)
     
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "c": c_param,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.idle.wx.idleitem.edit",
-        "_bx-m": "1",
-    }
-    
-    url = f"{BASE_URL_EDIT}?{urlencode(params)}"
-    
-    headers = {
-        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
-        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
-        "x-tap": "wx",
-        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
-    }
-    
-    try:
-        response = session.post(
-            url,
-            headers=headers,
-            cookies=cookies,
-            data={"data": data_str},
-            timeout=60
-        )
-    except requests.exceptions.Timeout:
-        raise Exception("请求超时，请检查网络")
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    return response.json()
+    return {"ret": ["重试失败"]}
 
 # ==================== 下载图片 ====================
 
 def download_image_from_url(url: str):
-    """从URL下载图片"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=60, verify=False)
-        response.raise_for_status()
-    except requests.exceptions.Timeout:
-        raise Exception("下载图片超时")
+    response = requests.get(url, headers=headers, timeout=60, verify=False)
+    response.raise_for_status()
     
     content = response.content
     if len(content) == 0:
@@ -405,7 +397,6 @@ def download_image_from_url(url: str):
     return content, file_name, mime
 
 def process_uploaded_file(uploaded_file):
-    """处理上传的文件"""
     try:
         image = Image.open(io.BytesIO(uploaded_file.getvalue()))
         return {
@@ -421,9 +412,8 @@ def process_uploaded_file(uploaded_file):
 
 # ==================== 主界面 ====================
 def main():
-    st.title("📷 闲鱼商品图片修改工具 - 完整数据版")
+    st.title("📷 闲鱼商品图片修改工具 - 自动更新c参数版")
     
-    # 认证信息配置
     st.header("🔑 认证信息配置")
     
     cookie_input = st.text_area(
@@ -434,13 +424,9 @@ def main():
     )
     
     if st.button("解析Cookie", use_container_width=True):
-        if cookie_input:
-            if update_auth_from_cookie(cookie_input):
-                st.success("✅ Cookie解析成功")
-                st.info(f"_m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:50]}...")
-                st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
-            else:
-                st.error("❌ Cookie解析失败，请确保包含 _m_h5_tk")
+        if update_auth_from_cookie(cookie_input):
+            st.success("✅ Cookie解析成功")
+            st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
     
     if not st.session_state.auth_parsed:
         st.warning("⚠️ 请先粘贴Cookie并解析")
@@ -448,48 +434,29 @@ def main():
     
     st.divider()
     
-    # 商品信息
     st.header("📦 商品信息")
+    item_id = st.text_input("商品ID", value="1033424722209")
     
-    item_id = st.text_input(
-        "商品ID",
-        placeholder="请输入要修改图片的商品ID",
-        value="1033424722209"
-    )
-    
-    st.info("💡 提示：商品的其他信息（标题、价格、分类等）已内置，只修改图片URL")
+    st.info("💡 程序会自动检测并更新c参数")
     
     st.divider()
     
-    # 图片上传
     st.header("📤 新图片上传")
-    
-    image_source = st.radio(
-        "选择图片来源",
-        ["网络图片URL", "本地上传"],
-        horizontal=True
-    )
+    image_source = st.radio("选择图片来源", ["网络图片URL", "本地上传"], horizontal=True)
     
     new_image_data = None
     
     if image_source == "网络图片URL":
-        new_image_url = st.text_input("图片URL", placeholder="https://example.com/new_image.jpg")
-        
+        new_image_url = st.text_input("图片URL")
         if new_image_url and st.button("预览新图片"):
             try:
                 st.image(new_image_url, width=200)
             except:
                 st.error("无法预览图片")
-        
         if new_image_url:
             new_image_data = {"type": "url", "value": new_image_url}
-        
     else:
-        uploaded_file = st.file_uploader(
-            "选择图片文件",
-            type=['png', 'jpg', 'jpeg', 'gif', 'webp']
-        )
-        
+        uploaded_file = st.file_uploader("选择图片文件", type=['png', 'jpg', 'jpeg', 'gif', 'webp'])
         if uploaded_file:
             img_info = process_uploaded_file(uploaded_file)
             if img_info:
@@ -499,9 +466,6 @@ def main():
     
     st.divider()
     
-    # 执行更新
-    st.header("🚀 执行更新")
-    
     if st.button("开始修改商品图片", type="primary", use_container_width=True):
         if not item_id:
             st.error("❌ 请输入商品ID")
@@ -510,22 +474,16 @@ def main():
         else:
             try:
                 with st.spinner("处理中..."):
-                    # 上传图片
                     if new_image_data["type"] == "url":
-                        st.info("下载图片中...")
                         img_bytes, img_name, img_mime = download_image_from_url(new_image_data["value"])
-                        st.info("上传图片中...")
                         final_url = upload_image(img_bytes, img_name, img_mime)
                     else:
                         img_info = new_image_data["value"]
-                        st.info("上传图片中...")
                         final_url = upload_image(img_info["bytes"], img_info["name"], img_info["mime"])
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    # 修改商品图片（使用内置完整数据）
-                    st.info("正在修改商品图片...")
-                    result = edit_item_image_with_full_data(item_id, final_url)
+                    result = edit_item_image_with_retry(item_id, final_url)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
@@ -533,23 +491,10 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
-                        # 显示完整返回供调试
                         with st.expander("查看详细返回"):
                             st.json(result)
-                        
-            except requests.exceptions.Timeout:
-                st.error("❌ 请求超时，请检查网络后重试")
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
-    
-    # 底部说明
-    st.divider()
-    st.caption("💡 使用说明：\n"
-               "1. Cookie已自动填入，点击解析\n"
-               "2. 输入商品ID\n"
-               "3. 选择新图片\n"
-               "4. 点击开始修改\n\n"
-               "📦 已内置商品数据：标题、价格、分类、地址等（从你之前的请求中提取）")
 
 if __name__ == "__main__":
     main()
