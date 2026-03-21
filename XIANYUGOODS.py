@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 最终版（使用你成功请求的完整数据）
+# XIANYUGOODS.py - 最终修复版（使用你成功请求的完整data）
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote
 import os
 import random
 import string
@@ -61,7 +61,8 @@ if 'auth_info' not in st.session_state:
     }
 if 'current_c_param' not in st.session_state:
     st.session_state.current_c_param = ""
-
+if 'full_edit_data' not in st.session_state:
+    st.session_state.full_edit_data = None
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
 
@@ -97,6 +98,147 @@ def update_auth_from_cookie(cookie_str: str) -> bool:
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+# ==================== 获取完整编辑数据 ====================
+
+def get_full_edit_data(item_id: str) -> dict:
+    """获取完整的编辑数据（从服务器获取当前商品信息）"""
+    cookies = st.session_state.auth_info.get("cookies", {}).copy()
+    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
+    token = st.session_state.auth_info.get("token", "")
+    
+    if not token and m_h5_tk:
+        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    
+    if m_h5_tk:
+        cookies["_m_h5_tk"] = m_h5_tk
+    
+    # 获取商品详情
+    data_obj = {
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "itemId": str(item_id),
+        "formScene": "",
+        "extra": json.dumps({"isShare": False})
+    }
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+    
+    t = str(int(time.time() * 1000))
+    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    
+    params = {
+        "jsv": "2.4.12",
+        "appKey": APP_KEY,
+        "t": t,
+        "sign": sign,
+        "v": "1.0",
+        "type": "originaljson",
+        "accountSite": "xianyu",
+        "dataType": "json",
+        "timeout": "20000",
+        "api": "mtop.taobao.idle.weixin.detail",
+        "_bx-m": "1",
+    }
+    
+    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/?{urlencode(params)}"
+    
+    headers = {
+        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+        "sgcookie": cookies.get('sgcookie', ''),
+        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
+        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
+        "x-tap": "wx",
+        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
+    }
+    
+    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
+    
+    if response.status_code != 200:
+        raise Exception(f"获取商品信息失败: HTTP {response.status_code}")
+    
+    result = response.json()
+    
+    if not result.get("ret") or "SUCCESS" not in str(result["ret"]):
+        raise Exception(f"获取商品信息失败: {result.get('ret')}")
+    
+    return result
+
+# ==================== 获取c参数 ====================
+
+def get_c_param(item_id: str) -> str:
+    """获取新的c参数"""
+    cookies = st.session_state.auth_info.get("cookies", {}).copy()
+    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
+    token = st.session_state.auth_info.get("token", "")
+    
+    if not token and m_h5_tk:
+        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+    
+    if m_h5_tk:
+        cookies["_m_h5_tk"] = m_h5_tk
+    
+    data_obj = {
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "itemId": str(item_id),
+    }
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+    
+    t = str(int(time.time() * 1000))
+    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
+    
+    params = {
+        "jsv": "2.4.12",
+        "appKey": APP_KEY,
+        "t": t,
+        "sign": sign,
+        "v": "1.0",
+        "type": "originaljson",
+        "accountSite": "xianyu",
+        "dataType": "json",
+        "timeout": "20000",
+        "api": "mtop.idle.wx.idleitem.editdetail",
+        "_bx-m": "1",
+    }
+    
+    url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
+    
+    headers = {
+        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+        "sgcookie": cookies.get('sgcookie', ''),
+        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
+        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
+        "x-tap": "wx",
+        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
+    }
+    
+    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
+    
+    if response.status_code != 200:
+        raise Exception(f"获取c参数失败: HTTP {response.status_code}")
+    
+    result = response.json()
+    
+    # 从redirectUrl中提取c参数
+    if result.get("data") and result["data"].get("redirectUrl"):
+        redirect_url = result["data"]["redirectUrl"]
+        match = re.search(r'c=([^&]+)', redirect_url)
+        if match:
+            return unquote(match.group(1))
+    
+    # 从响应中直接获取
+    if result.get("c"):
+        return result["c"]
+    
+    raise Exception("未能提取c参数")
 
 # ==================== 上传图片 ====================
 
@@ -164,10 +306,52 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     
     return image_url
 
+# ==================== 构建编辑数据 ====================
+
+def build_edit_data(item_detail: dict, new_image_url: str) -> dict:
+    """从商品详情构建编辑数据，替换图片URL"""
+    item_data = item_detail.get("data", {}).get("itemDO", {})
+    
+    # 构建图片信息
+    image_info = {
+        "major": True,
+        "type": 0,
+        "url": new_image_url,
+        "widthSize": "640",
+        "heightSize": "640"
+    }
+    
+    # 构建完整的编辑数据
+    edit_data = {
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "itemId": str(item_data.get("itemId")),
+        "imageInfoDOList": [image_info],
+        "itemTextDTO": item_data.get("itemTextDTO", {}),
+        "itemPriceDTO": item_data.get("itemPriceDTO", {}),
+        "itemAddrDTO": item_data.get("itemAddrDTO", {}),
+        "itemCatDTO": item_data.get("itemCatDTO", {}),
+        "stuffStatus": item_data.get("stuffStatus", "9"),
+        "quantity": item_data.get("quantity", "1"),
+        "itemLabelExtList": item_data.get("itemLabelExtList", []),
+        "itemPostFeeDTO": item_data.get("itemPostFeeDTO", {}),
+        "canBargain": item_data.get("canBargain", "true"),
+        "supportBargainPrice": item_data.get("supportBargainPrice", "true"),
+        "defaultPrice": item_data.get("defaultPrice", False),
+        "simpleItem": item_data.get("simpleItem", "true"),
+        "itemFrom": item_data.get("itemFrom", "wechat"),
+        "itemTypeStr": item_data.get("itemTypeStr", "b"),
+        "redirectUrl": item_data.get("redirectUrl", f"fleamarket://awesome_detail?itemId={item_data.get('itemId')}&hitNativeDetail=true&flutter=true&needNotPreGet=true"),
+        "jumpUrl": item_data.get("jumpUrl", f"fleamarket://awesome_detail?itemId={item_data.get('itemId')}&hitNativeDetail=true&flutter=true&needNotPreGet=true"),
+    }
+    
+    return edit_data
+
 # ==================== 修改商品图片 ====================
 
-def edit_item_image(item_id: str, image_url: str) -> dict:
-    """修改商品图片 - 使用动态数据"""
+def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict) -> dict:
+    """修改商品图片"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -178,31 +362,7 @@ def edit_item_image(item_id: str, image_url: str) -> dict:
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    # 使用当前的c参数
-    c_param = st.session_state.current_c_param
-    if not c_param:
-        # 如果没有c参数，提示用户
-        raise Exception("请先获取c参数")
-    
-    # 构建图片信息
-    image_info = {
-        "major": True,
-        "type": 0,
-        "url": image_url,
-        "widthSize": "640",
-        "heightSize": "640"
-    }
-    
-    # 构建请求数据 - 只包含必要字段
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_id),
-        "imageInfoDOList": [image_info],
-    }
-    
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+    data_str = json.dumps(edit_data, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
@@ -236,89 +396,12 @@ def edit_item_image(item_id: str, image_url: str) -> dict:
         "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
     }
     
-    st.info(f"使用c参数: {c_param[:50]}...")
-    
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
     
     if response.status_code != 200:
         raise Exception(f"HTTP错误: {response.status_code}")
     
     return response.json()
-
-# ==================== 获取c参数 ====================
-
-def get_c_param_from_edit_page(item_id: str) -> str:
-    """从编辑页面获取新的c参数"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    token = st.session_state.auth_info.get("token", "")
-    
-    if not token and m_h5_tk:
-        token = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    # 构建请求数据 - 获取编辑页面
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_id),
-    }
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
-    
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str) if token else ""
-    
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.idle.wx.idleitem.editdetail",
-        "_bx-m": "1",
-    }
-    
-    url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
-    
-    headers = {
-        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
-        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
-        "x-tap": "wx",
-        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
-    }
-    
-    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"获取c参数失败: HTTP {response.status_code}")
-    
-    result = response.json()
-    
-    # 从响应中提取c参数
-    if result.get("data") and result["data"].get("redirectUrl"):
-        redirect_url = result["data"]["redirectUrl"]
-        match = re.search(r'c=([^&]+)', redirect_url)
-        if match:
-            return match.group(1)
-    
-    # 如果从redirectUrl没找到，尝试从其他地方
-    c_param = result.get("c")
-    if c_param:
-        return c_param
-    
-    raise Exception("未能从响应中提取c参数")
 
 # ==================== 下载图片 ====================
 
@@ -382,18 +465,32 @@ def main():
     st.header("📦 商品信息")
     item_id = st.text_input("商品ID", value="1033424722209")
     
-    if st.button("获取c参数", use_container_width=True):
-        try:
-            with st.spinner("获取c参数中..."):
-                c_param = get_c_param_from_edit_page(item_id)
-                st.session_state.current_c_param = c_param
-                st.success(f"✅ c参数获取成功")
-                st.info(f"c参数: {c_param[:80]}...")
-        except Exception as e:
-            st.error(f"获取c参数失败: {str(e)}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("获取商品完整数据", use_container_width=True):
+            try:
+                with st.spinner("获取商品信息中..."):
+                    full_data = get_full_edit_data(item_id)
+                    st.session_state.full_edit_data = full_data
+                    item_data = full_data.get("data", {}).get("itemDO", {})
+                    image_infos = item_data.get("imageInfos", [])
+                    if image_infos:
+                        st.session_state.current_item_image = image_infos[0].get("url")
+                    st.success("✅ 商品数据获取成功")
+                    st.image(st.session_state.current_item_image, width=150)
+            except Exception as e:
+                st.error(f"获取失败: {str(e)}")
     
-    if st.session_state.current_c_param:
-        st.success("✅ c参数已就绪")
+    with col2:
+        if st.button("获取c参数", use_container_width=True):
+            try:
+                with st.spinner("获取c参数中..."):
+                    c_param = get_c_param(item_id)
+                    st.session_state.current_c_param = c_param
+                    st.success(f"✅ c参数获取成功")
+                    st.info(f"c参数: {c_param[:80]}...")
+            except Exception as e:
+                st.error(f"获取失败: {str(e)}")
     
     st.divider()
     
@@ -429,9 +526,12 @@ def main():
             st.error("❌ 请先选择图片")
         elif not st.session_state.current_c_param:
             st.error("❌ 请先获取c参数")
+        elif not st.session_state.full_edit_data:
+            st.error("❌ 请先获取商品完整数据")
         else:
             try:
                 with st.spinner("处理中..."):
+                    # 上传图片
                     if new_image_data["type"] == "url":
                         img_bytes, img_name, img_mime = download_image_from_url(new_image_data["value"])
                         final_url = upload_image(img_bytes, img_name, img_mime)
@@ -441,7 +541,11 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    result = edit_item_image(item_id, final_url)
+                    # 构建编辑数据
+                    edit_data = build_edit_data(st.session_state.full_edit_data, final_url)
+                    
+                    # 修改商品图片
+                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param, edit_data)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
@@ -457,9 +561,10 @@ def main():
     st.divider()
     st.caption("💡 使用步骤：\n"
                "1. 解析Cookie\n"
-               "2. 点击'获取c参数'获取新的c参数\n"
-               "3. 选择新图片\n"
-               "4. 点击开始修改")
+               "2. 点击'获取商品完整数据'获取当前商品所有信息\n"
+               "3. 点击'获取c参数'获取新的c参数\n"
+               "4. 选择新图片\n"
+               "5. 点击开始修改")
 
 if __name__ == "__main__":
     main()
