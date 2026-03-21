@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 最终修正版
+# XIANYUGOODS.py - 最终修正版（使用正确的编辑API）
 import streamlit as st
 import hashlib
 import json
@@ -20,10 +20,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_KEY = "12574478"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_DETAIL = "https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/"
-# 尝试不同的更新API
-BASE_URL_UPDATE = "https://acs.m.goofish.com/h5/mtop.taobao.idle.item.publish/1.0/"
-# 备用API
-BASE_URL_UPDATE_ALT = "https://acs.m.goofish.com/h5/mtop.idle.item.update/1.0/"
+# 正确的编辑商品API
+BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
+BASE_URL_EDIT_DETAIL = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
 # 全局session
@@ -238,7 +237,7 @@ def update_token_from_response(response) -> bool:
     
     return updated
 
-# ==================== 图片上传（增加超时时间）====================
+# ==================== 图片上传 ====================
 
 def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int = 0) -> str:
     """上传图片到闲鱼服务器"""
@@ -305,7 +304,7 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
             headers=headers,
             cookies=cookies,
             data=body,
-            timeout=60  # 增加超时时间到60秒
+            timeout=60
         )
     except requests.exceptions.Timeout:
         if retry_count < 2:
@@ -421,7 +420,7 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     return result
 
 def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dict:
-    """更新商品图片 - 使用正确的API"""
+    """更新商品图片 - 使用正确的编辑API"""
     global CURRENT_M_H5_TK
     
     token = st.session_state.auth_info["token"]
@@ -442,85 +441,72 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
         "platform": "windows",
         "miniAppVersion": "9.9.9",
         "itemId": str(item_id),
-        "imageUrl": image_url,  # 改为imageUrl
+        "imageUrl": image_url,  # 图片URL
+        "images": [image_url],  # 同时支持数组格式
     }
     data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
     
-    # 尝试不同的API
-    apis = [
-        "mtop.taobao.idle.item.publish",
-        "mtop.idle.item.update",
-        "mtop.taobao.idle.item.update"
-    ]
+    # 使用正确的编辑API
+    api = "mtop.idle.wx.idleitem.edit"
+    url = f"{BASE_URL_EDIT}?{urlencode(params)}"
     
-    last_error = None
+    params = {
+        "jsv": "2.4.12",
+        "appKey": APP_KEY,
+        "t": t,
+        "sign": sign,
+        "c": c_param,
+        "v": "1.0",
+        "type": "originaljson",
+        "accountSite": "xianyu",
+        "dataType": "json",
+        "timeout": "20000",
+        "api": api,
+        "_bx-m": "1",
+    }
     
-    for api in apis:
-        try:
-            # 构建URL和参数
-            params = {
-                "jsv": "2.4.12",
-                "appKey": APP_KEY,
-                "t": t,
-                "sign": sign,
-                "c": c_param,
-                "v": "1.0",
-                "type": "originaljson",
-                "accountSite": "xianyu",
-                "dataType": "json",
-                "timeout": "20000",
-                "api": api,
-                "_bx-m": "1",
-            }
-            
-            url = f"https://acs.m.goofish.com/h5/{api}/1.0/?{urlencode(params)}"
-            
-            headers = {
-                "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-                "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-            }
-            
-            # 添加特殊headers
-            for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua']:
-                if h in st.session_state.auth_info.get('headers', {}):
-                    headers[h] = st.session_state.auth_info['headers'][h]
-            
-            st.info(f"尝试API: {api}")
-            
-            response = session.post(
-                url,
-                headers=headers,
-                cookies=cookies,
-                data={"data": data_str},
-                timeout=30
-            )
-            
-            # 更新token
-            update_token_from_response(response)
-            
-            if response.status_code != 200:
-                last_error = f"HTTP {response.status_code}"
-                continue
-            
-            result = response.json()
-            
-            # 如果成功，返回结果
-            if result.get("ret") and "SUCCESS" in str(result["ret"]):
-                return result
-            
-            last_error = result.get("ret", ["未知错误"])[0]
-            
-        except Exception as e:
-            last_error = str(e)
-            continue
+    url = f"https://acs.m.goofish.com/h5/{api}/1.0/2.0/?{urlencode(params)}"
     
-    raise Exception(f"所有API都失败，最后错误: {last_error}")
+    headers = {
+        "User-Agent": st.session_state.auth_info.get('headers', {}).get('user-agent',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
+    }
+    
+    # 添加特殊headers
+    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap', 'bx-ua']:
+        if h in st.session_state.auth_info.get('headers', {}):
+            headers[h] = st.session_state.auth_info['headers'][h]
+    
+    response = session.post(
+        url,
+        headers=headers,
+        cookies=cookies,
+        data={"data": data_str},
+        timeout=30
+    )
+    
+    # 更新token
+    update_token_from_response(response)
+    
+    if response.status_code != 200:
+        raise Exception(f"HTTP错误: {response.status_code}")
+    
+    result = response.json()
+    
+    # 如果token过期且未重试，则重试
+    if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
+        if retry_count == 0:
+            st.info("Token过期，尝试重试...")
+            time.sleep(1)
+            return update_item_image(item_id, image_url, retry_count=1)
+    
+    return result
 
 # ==================== 图片下载 ====================
 
@@ -697,7 +683,6 @@ def main():
                         final_url = upload_image(img_info["bytes"], img_info["name"], img_info["mime"])
                     
                     st.success(f"✅ 图片上传成功")
-                    st.info(f"图片URL: {final_url[:100]}...")
                     
                     # 修改商品图片
                     st.info("正在修改商品图片...")
@@ -709,11 +694,9 @@ def main():
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
-                        st.json(result)
                         
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
-                st.info("请检查：\n1. 商品ID是否正确\n2. 是否有修改该商品的权限\n3. Cookie是否有效")
     
     # 底部说明
     st.divider()
@@ -723,7 +706,7 @@ def main():
                "3. 输入商品ID，点击获取当前图片确认商品\n"
                "4. 选择新图片（支持URL或本地上传）\n"
                "5. 点击开始修改商品图片\n"
-               "6. 程序会尝试多个API接口")
+               "6. 使用API: mtop.idle.wx.idleitem.edit")
 
 if __name__ == "__main__":
     main()
