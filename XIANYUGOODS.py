@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 完全按照头像脚本逻辑
+# XIANYUGOODS.py - 完整版（从c参数自动提取令牌）
 import streamlit as st
 import hashlib
 import json
@@ -12,6 +12,7 @@ import requests
 import urllib3
 from PIL import Image
 import re
+import mimetypes
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -66,7 +67,7 @@ def extract_from_request(request_text: str) -> dict:
         "params": {},
         "data": {},
         "utdid": None,
-        "token": CURRENT_M_H5_TK.split('_')[0] if '_' in CURRENT_M_H5_TK else CURRENT_M_H5_TK,
+        "token": "",
         "m_h5_tk": CURRENT_M_H5_TK,
         "c_param": "",
     }
@@ -157,11 +158,6 @@ def extract_from_request(request_text: str) -> dict:
         except Exception:
             pass
     
-    print(f"\n=== 提取结果 ===")
-    print(f"c_param: {info['c_param'][:50] if info['c_param'] else 'None'}")
-    print(f"utdid: {info['utdid']}")
-    print(f"token: {info['token'][:20] if info['token'] else 'None'}...")
-    
     return info
 
 def update_auth_info(request_text: str) -> bool:
@@ -176,17 +172,27 @@ def update_auth_info(request_text: str) -> bool:
     
     st.session_state.auth_info = info
     
-    # 从c参数中提取token
-    if info["c_param"] and '_' in info["c_param"]:
-        token_part = info["c_param"].split('_')[0]
-        if token_part:
-            st.session_state.auth_info["token"] = token_part
-            # 如果没有_m_h5_tk，用token构造一个
-            if not info["m_h5_tk"]:
-                CURRENT_M_H5_TK = f"{token_part}_{int(time.time() * 1000)}"
+    # ========== 关键：从c参数构造初始的 _m_h5_tk ==========
+    if info["c_param"]:
+        # c参数格式: "5485de01f32ee7f61c58fbbdc09ca2e0_1774058528269;f42a18f8cc44e5bf026154dffb5022b2"
+        # 提取下划线前的token和下划线后的时间戳
+        if '_' in info["c_param"]:
+            parts = info["c_param"].split('_')
+            if len(parts) >= 2:
+                token_part = parts[0]
+                # 提取时间戳部分（下划线后到分号前）
+                timestamp_part = parts[1].split(';')[0]
+                # 构造 _m_h5_tk
+                CURRENT_M_H5_TK = f"{token_part}_{timestamp_part}"
+                st.session_state.auth_info["token"] = token_part
                 st.session_state.auth_info["m_h5_tk"] = CURRENT_M_H5_TK
-            else:
-                CURRENT_M_H5_TK = info["m_h5_tk"]
+                print(f"✅ 从c参数构造 _m_h5_tk: {CURRENT_M_H5_TK}")
+        else:
+            # 如果c参数没有下划线，直接用c参数作为token
+            CURRENT_M_H5_TK = info["c_param"]
+            st.session_state.auth_info["token"] = info["c_param"]
+            st.session_state.auth_info["m_h5_tk"] = CURRENT_M_H5_TK
+            print(f"✅ 使用c参数作为 _m_h5_tk: {CURRENT_M_H5_TK[:50]}...")
     
     st.session_state.auth_parsed = True
     
@@ -197,7 +203,26 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-# ==================== 图片上传（完全按照头像脚本）====================
+def update_token_from_response(response) -> bool:
+    """从响应中更新token"""
+    global CURRENT_M_H5_TK
+    
+    updated = False
+    
+    # 从cookies中提取新的 _m_h5_tk
+    if '_m_h5_tk' in response.cookies:
+        new_m_h5_tk = response.cookies['_m_h5_tk']
+        if new_m_h5_tk != CURRENT_M_H5_TK:
+            print(f"✅ 发现新的 _m_h5_tk: {new_m_h5_tk[:50]}...")
+            print(f"✅ 自动更新当前token")
+            CURRENT_M_H5_TK = new_m_h5_tk
+            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
+            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
+            updated = True
+    
+    return updated
+
+# ==================== 图片上传 ====================
 
 def upload_bytes(file_name: str, file_bytes: bytes, mime: str) -> str:
     """上传图片到闲鱼服务器"""
@@ -238,7 +263,7 @@ def upload_bytes(file_name: str, file_bytes: bytes, mime: str) -> str:
             headers[h] = st.session_state.auth_info["headers"][h]
 
     print(f"上传文件到: {UPLOAD_URL}")
-    print(f"使用的_m_h5_tk: {CURRENT_M_H5_TK}")
+    print(f"使用的_m_h5_tk: {CURRENT_M_H5_TK[:50]}...")
     
     response = session.post(
         UPLOAD_URL,
@@ -284,7 +309,7 @@ def upload_from_local(uploaded_file) -> str:
     mime = uploaded_file.type or 'image/jpeg'
     return upload_bytes(file_name, file_bytes, mime)
 
-# ==================== 商品操作（完全按照头像脚本逻辑）====================
+# ==================== 商品操作 ====================
 
 def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dict:
     """更新商品图片"""
@@ -354,8 +379,8 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
             headers[h] = st.session_state.auth_info["headers"][h]
 
     print(f"\n发送请求到: {BASE_URL_EDIT}")
-    print(f"使用的token: {token}")
-    print(f"使用的_m_h5_tk: {m_h5_tk}")
+    print(f"使用的token: {token[:20]}...")
+    print(f"使用的_m_h5_tk: {m_h5_tk[:50]}...")
 
     # 使用session发送请求
     response = session.post(
@@ -369,25 +394,20 @@ def update_item_image(item_id: str, image_url: str, retry_count: int = 0) -> dic
     print(f"响应状态码: {response.status_code}")
     
     # 自动提取新的 _m_h5_tk 并更新
-    token_updated = False
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != CURRENT_M_H5_TK:
-            print(f"发现新的 _m_h5_tk: {new_m_h5_tk}")
-            print(f"自动更新当前token")
-            CURRENT_M_H5_TK = new_m_h5_tk
-            # 更新到auth_info
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-            token_updated = True
+    token_updated = update_token_from_response(response)
     
     result = response.json()
     
-    # 如果返回非法令牌且没有重试过，并且token被更新了，则自动重试一次
-    if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]) and retry_count == 0 and token_updated:
-        print("\n检测到新token，自动重试一次...")
-        time.sleep(1)
-        return update_item_image(item_id, image_url, retry_count=1)
+    # 如果返回令牌过期且没有重试过，并且token被更新了，则自动重试一次
+    if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
+        if retry_count == 0:
+            if token_updated:
+                print("\n检测到新token，自动重试一次...")
+                time.sleep(1)
+                return update_item_image(item_id, image_url, retry_count=1)
+            else:
+                print("\n令牌过期，但没有新token，请重新获取c参数")
+                raise Exception("令牌过期，请重新从浏览器获取新的c参数")
     
     return result
 
@@ -465,25 +485,23 @@ def get_item_detail(item_id: str, retry_count: int = 0) -> dict:
     )
     
     # 自动提取新的 _m_h5_tk 并更新
-    token_updated = False
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != CURRENT_M_H5_TK:
-            print(f"发现新的 _m_h5_tk: {new_m_h5_tk}")
-            CURRENT_M_H5_TK = new_m_h5_tk
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-            token_updated = True
+    token_updated = update_token_from_response(response)
     
     if response.status_code != 200:
         raise Exception(f"HTTP错误: {response.status_code}")
     
     result = response.json()
     
-    if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]) and retry_count == 0 and token_updated:
-        print("\n检测到新token，自动重试一次...")
-        time.sleep(1)
-        return get_item_detail(item_id, retry_count=1)
+    # 如果返回令牌过期且没有重试过，并且token被更新了，则自动重试一次
+    if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
+        if retry_count == 0:
+            if token_updated:
+                print("\n检测到新token，自动重试一次...")
+                time.sleep(1)
+                return get_item_detail(item_id, retry_count=1)
+            else:
+                print("\n令牌过期，但没有新token，请重新获取c参数")
+                raise Exception("令牌过期，请重新从浏览器获取新的c参数")
     
     return result
 
@@ -507,10 +525,10 @@ def main():
             if update_auth_info(request_text):
                 st.session_state.auth_parsed = True
                 st.success("✅ 认证信息解析成功")
-                st.info(f"c参数: {st.session_state.auth_info['c_param'][:50]}...")
+                st.info(f"c参数: {st.session_state.auth_info['c_param'][:80]}...")
                 st.info(f"utdid: {st.session_state.auth_info['utdid']}")
                 st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
-                st.info(f"_m_h5_tk: {CURRENT_M_H5_TK[:50] if CURRENT_M_H5_TK else 'None'}...")
+                st.info(f"_m_h5_tk: {CURRENT_M_H5_TK[:80] if CURRENT_M_H5_TK else 'None'}...")
             else:
                 st.error("❌ 解析失败")
     
