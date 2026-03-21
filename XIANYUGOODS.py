@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 最终修复版（确保token正确传递）
+# XIANYUGOODS.py - 最终修正版（使用你头像脚本的方式）
 import streamlit as st
 import hashlib
 import json
@@ -90,11 +90,9 @@ def update_auth_from_cookie(cookie_str: str) -> bool:
     
     st.session_state.auth_info["cookies"] = cookies
     
-    # 提取_m_h5_tk
     if '_m_h5_tk' in cookies:
         m_h5_tk = cookies['_m_h5_tk']
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
-        # 提取token（下划线前面的部分）
         if '_' in m_h5_tk:
             token = m_h5_tk.split('_')[0]
             st.session_state.auth_info["token"] = token
@@ -110,15 +108,14 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-# ==================== 获取商品完整数据 ====================
+# ==================== 获取商品完整数据（使用头像脚本的方式）====================
 
 def get_full_edit_data(item_id: str) -> dict:
-    """获取完整的商品数据"""
+    """获取完整的商品数据 - 使用头像脚本的请求方式"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
     
-    # 确保token不为空
     if not token:
         if '_' in m_h5_tk:
             token = m_h5_tk.split('_')[0]
@@ -126,15 +123,13 @@ def get_full_edit_data(item_id: str) -> dict:
             token = m_h5_tk
     
     if not token:
-        raise Exception("token为空，请检查Cookie")
+        raise Exception("token为空")
     
-    st.info(f"使用的token: {token}")
-    st.info(f"使用的_m_h5_tk: {m_h5_tk}")
-    
+    # 把_m_h5_tk放到cookies里
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
+        cookies["_m_h5_tk_enc"] = "927a61b5898abf557861458d0ea06b6f"
     
-    # 获取商品详情
     data_obj = {
         "utdid": FIXED_UTDID,
         "platform": "windows",
@@ -169,12 +164,16 @@ def get_full_edit_data(item_id: str) -> dict:
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
-        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
-        "x-tap": "wx",
-        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
     }
+    
+    # 添加sgcookie
+    if 'sgcookie' in cookies:
+        headers['sgcookie'] = cookies['sgcookie']
+    
+    # 添加其他headers
+    for h in ['bx-umidtoken', 'x-ticid', 'x-tap', 'mini-janus']:
+        if h in FIXED_HEADERS:
+            headers[h] = FIXED_HEADERS[h]
     
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
     
