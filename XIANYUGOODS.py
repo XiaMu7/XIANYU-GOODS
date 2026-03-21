@@ -1,9 +1,9 @@
-# XIANYUGOODS.py - 修复版
+# XIANYUGOODS.py - 最终简化版
 import streamlit as st
 import hashlib
 import json
 import time
-from urllib.parse import urlencode, parse_qs, unquote
+from urllib.parse import urlencode, unquote
 import os
 import random
 import string
@@ -39,12 +39,9 @@ if 'auth_info' not in st.session_state:
     st.session_state.auth_info = {
         "cookies": {},
         "headers": {},
-        "params": {},
-        "data": {},
-        "utdid": FIXED_UTDID,
         "token": "",
-        "m_h5_tk": "",
         "c_param": "",
+        "utdid": FIXED_UTDID,
     }
 
 if 'auth_parsed' not in st.session_state:
@@ -53,12 +50,6 @@ if 'auth_parsed' not in st.session_state:
 if 'current_item_image' not in st.session_state:
     st.session_state.current_item_image = None
 
-if 'current_m_h5_tk' not in st.session_state:
-    st.session_state.current_m_h5_tk = ""
-
-if 'current_token' not in st.session_state:
-    st.session_state.current_token = ""
-
 # ==================== 从请求中提取信息 ====================
 
 def extract_from_request(request_text: str) -> dict:
@@ -66,12 +57,9 @@ def extract_from_request(request_text: str) -> dict:
     info = {
         "cookies": {},
         "headers": {},
-        "params": {},
-        "data": {},
-        "utdid": None,
         "token": "",
-        "m_h5_tk": "",
         "c_param": "",
+        "utdid": FIXED_UTDID,
     }
     
     lines = request_text.strip().split('\n')
@@ -81,28 +69,17 @@ def extract_from_request(request_text: str) -> dict:
     url_match = re.search(r'\?(.*?)(?:\s|$)', first_line)
     if url_match:
         params_str = url_match.group(1)
-        try:
-            params = parse_qs(params_str)
-            for k, v in params.items():
-                info["params"][k] = v[0] if v else ""
-        except:
-            pass
-        
-        # 提取c参数（这个c参数包含session信息）
-        if 'c' in info["params"]:
-            info["c_param"] = info["params"]["c"]
-            print(f"提取到c参数: {info['c_param'][:50]}...")
-        
-        # 从c参数中提取_m_h5_tk？c参数格式: "5485de01f32ee7f61c58fbbdc09ca2e0_1774058528269;f42a18f8cc44e5bf026154dffb5022b2"
-        # 第一部分可能就是token
-        if info["c_param"] and '_' in info["c_param"]:
-            parts = info["c_param"].split('_')
-            if len(parts) >= 2:
-                # 第一个下划线前的部分可能是token
-                potential_token = parts[0]
-                info["m_h5_tk"] = f"{potential_token}_{parts[1].split(';')[0]}" if ';' in parts[1] else f"{potential_token}_{parts[1]}"
-                info["token"] = potential_token
-                print(f"从c参数提取token: {info['token'][:20]}...")
+        # 提取c参数
+        c_match = re.search(r'c=([^&]+)', params_str)
+        if c_match:
+            c_value = c_match.group(1)
+            # URL解码
+            c_value = unquote(c_value)
+            info["c_param"] = c_value
+            # 从c参数中提取token（下划线前的部分）
+            if '_' in c_value:
+                info["token"] = c_value.split('_')[0]
+                print(f"提取到token: {info['token']}")
     
     # 解析headers
     for line in lines[1:]:
@@ -115,54 +92,36 @@ def extract_from_request(request_text: str) -> dict:
             key_lower = key.lower()
             
             info["headers"][key] = value
-            print(f"Header: {key} = {value[:50]}...")
-            
-            # 特殊header处理 - 从x-smallstc提取cookie信息
-            if key_lower == 'x-smallstc':
-                try:
-                    smallstc = json.loads(value)
-                    print(f"解析x-smallstc: {smallstc}")
-                    
-                    # 提取cookie字段
-                    if 'cookie2' in smallstc:
-                        info["cookies"]['cookie2'] = str(smallstc['cookie2'])
-                    if 'sgcookie' in smallstc:
-                        info["cookies"]['sgcookie'] = str(smallstc['sgcookie'])
-                        info["headers"]['sgcookie'] = str(smallstc['sgcookie'])
-                    if 'csg' in smallstc:
-                        info["cookies"]['csg'] = str(smallstc['csg'])
-                    if 'unb' in smallstc:
-                        info["cookies"]['unb'] = str(smallstc['unb'])
-                    if 'munb' in smallstc:
-                        info["cookies"]['munb'] = str(smallstc['munb'])
-                    if 'sid' in smallstc:
-                        info["cookies"]['sid'] = str(smallstc['sid'])
-                        
-                except json.JSONDecodeError as e:
-                    print(f"解析x-smallstc失败: {e}")
             
             # 提取sgcookie
-            elif key_lower == 'sgcookie':
+            if key_lower == 'sgcookie':
                 info["cookies"]['sgcookie'] = value
-                info["headers"]['sgcookie'] = value
             
-            # 提取_m_h5_tk（可能在bx-ua中）
-            elif key_lower == 'bx-ua':
-                print(f"bx-ua内容: {value[:100]}...")
-                # 搜索_m_h5_tk
-                match = re.search(r'_m_h5_tk=([^;&]+)', value)
-                if match:
-                    info["m_h5_tk"] = match.group(1)
-                    info["token"] = info["m_h5_tk"].split('_')[0] if '_' in info["m_h5_tk"] else info["m_h5_tk"]
-                    print(f"从bx-ua提取_m_h5_tk: {info['m_h5_tk'][:30]}...")
+            # 提取bx-umidtoken
+            elif key_lower == 'bx-umidtoken':
+                info["headers"]['bx-umidtoken'] = value
+            
+            # 提取x-ticid
+            elif key_lower == 'x-ticid':
+                info["headers"]['x-ticid'] = value
+            
+            # 提取x-tap
+            elif key_lower == 'x-tap':
+                info["headers"]['x-tap'] = value
+            
+            # 从x-smallstc提取cookie
+            elif key_lower == 'x-smallstc':
+                try:
+                    smallstc = json.loads(value)
+                    if 'sgcookie' in smallstc:
+                        info["cookies"]['sgcookie'] = smallstc['sgcookie']
+                        info["headers"]['sgcookie'] = smallstc['sgcookie']
+                    if 'cookie2' in smallstc:
+                        info["cookies"]['cookie2'] = smallstc['cookie2']
+                except:
+                    pass
     
-    # 如果还没有m_h5_tk，尝试从cookies中获取
-    if not info["m_h5_tk"] and "_m_h5_tk" in info["cookies"]:
-        info["m_h5_tk"] = info["cookies"]["_m_h5_tk"]
-        info["token"] = info["m_h5_tk"].split('_')[0] if '_' in info["m_h5_tk"] else info["m_h5_tk"]
-        print(f"从cookies提取_m_h5_tk: {info['m_h5_tk'][:30]}...")
-    
-    # 解析data部分 - 查找最后的数据行
+    # 解析data部分提取utdid
     data_line = None
     for line in reversed(lines):
         line = line.strip()
@@ -172,44 +131,18 @@ def extract_from_request(request_text: str) -> dict:
     
     if data_line:
         try:
-            data_str = data_line[5:]  # 去掉"data="
-            # URL解码
+            data_str = data_line[5:]
             data_str = unquote(data_str)
-            print(f"解析data: {data_str[:100]}...")
-            try:
-                info["data"] = json.loads(data_str)
-                info["utdid"] = info["data"].get("utdid")
-                print(f"从data提取utdid: {info['utdid']}")
-            except json.JSONDecodeError:
-                # 如果JSON解析失败，尝试正则提取utdid
-                utdid_match = re.search(r'utdid[":]+([^"]+)', data_str)
-                if utdid_match:
-                    info["utdid"] = utdid_match.group(1)
-                    print(f"从data正则提取utdid: {info['utdid']}")
-        except Exception as e:
-            print(f"解析data失败: {e}")
-    
-    # 如果没有utdid，使用默认值
-    if not info["utdid"]:
-        info["utdid"] = FIXED_UTDID
-        print(f"使用默认utdid: {info['utdid']}")
-    
-    # 如果没有token，尝试使用默认值
-    if not info["token"]:
-        # 尝试从c参数构造
-        if info["c_param"]:
-            parts = info["c_param"].split('_')
-            if parts:
-                info["token"] = parts[0]
-                info["m_h5_tk"] = f"{parts[0]}_{int(time.time() * 1000)}" if len(parts) > 1 else info["c_param"]
-                print(f"从c参数构造token: {info['token'][:20]}...")
+            utdid_match = re.search(r'utdid[":]+([^"]+)', data_str)
+            if utdid_match:
+                info["utdid"] = utdid_match.group(1)
+        except:
+            pass
     
     print(f"\n=== 提取结果 ===")
     print(f"token: {info['token'][:20] if info['token'] else 'None'}...")
-    print(f"m_h5_tk: {info['m_h5_tk'][:30] if info['m_h5_tk'] else 'None'}...")
+    print(f"c_param: {info['c_param'][:50] if info['c_param'] else 'None'}...")
     print(f"utdid: {info['utdid']}")
-    print(f"c_param: {info['c_param'][:30] if info['c_param'] else 'None'}...")
-    print(f"cookies: {list(info['cookies'].keys())}")
     print(f"headers: {list(info['headers'].keys())}")
     
     return info
@@ -218,36 +151,14 @@ def update_auth_info(request_text: str) -> bool:
     """从请求文本更新认证信息"""
     info = extract_from_request(request_text)
     
-    if not info:
-        return False
-    
-    # 验证是否有必要的认证信息
-    if not info["token"] and not info["c_param"]:
-        st.error("未能提取到有效的认证信息（token或c参数）")
+    if not info["token"]:
+        st.error("未能提取到token，请检查请求头")
         return False
     
     st.session_state.auth_info = info
-    st.session_state.current_m_h5_tk = info["m_h5_tk"]
-    st.session_state.current_token = info["token"]
+    st.session_state.auth_parsed = True
     
     return True
-
-def update_token_from_response(response) -> bool:
-    """从响应中更新token"""
-    updated = False
-    
-    # 从cookies中提取新的_m_h5_tk
-    if '_m_h5_tk' in response.cookies:
-        new_m_h5_tk = response.cookies['_m_h5_tk']
-        if new_m_h5_tk != st.session_state.current_m_h5_tk:
-            st.session_state.current_m_h5_tk = new_m_h5_tk
-            st.session_state.current_token = new_m_h5_tk.split('_')[0] if '_' in new_m_h5_tk else new_m_h5_tk
-            st.session_state.auth_info['m_h5_tk'] = new_m_h5_tk
-            st.session_state.auth_info['token'] = st.session_state.current_token
-            updated = True
-            st.info(f"✅ Token已更新: {st.session_state.current_token[:20]}...")
-    
-    return updated
 
 def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     """计算签名"""
@@ -256,13 +167,9 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
 
 # ==================== 图片上传 ====================
 
-def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int = 0) -> str:
+def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     """上传图片到闲鱼服务器"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    
-    # 使用当前的 _m_h5_tk
-    if st.session_state.current_m_h5_tk:
-        cookies["_m_h5_tk"] = st.session_state.current_m_h5_tk
     
     # 构建multipart数据
     boundary = '----WebKitFormBoundary' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
@@ -302,9 +209,14 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
     }
     
     # 添加特殊headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap']:
-        if h in st.session_state.auth_info.get('headers', {}):
-            headers[h] = st.session_state.auth_info['headers'][h]
+    if 'sgcookie' in st.session_state.auth_info['cookies']:
+        headers['sgcookie'] = st.session_state.auth_info['cookies']['sgcookie']
+    if 'bx-umidtoken' in st.session_state.auth_info['headers']:
+        headers['bx-umidtoken'] = st.session_state.auth_info['headers']['bx-umidtoken']
+    if 'x-ticid' in st.session_state.auth_info['headers']:
+        headers['x-ticid'] = st.session_state.auth_info['headers']['x-ticid']
+    if 'x-tap' in st.session_state.auth_info['headers']:
+        headers['x-tap'] = st.session_state.auth_info['headers']['x-tap']
     
     params = {
         'folderId': '0',
@@ -321,18 +233,10 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
         timeout=30
     )
     
-    # 更新token
-    update_token_from_response(response)
-    
     if response.status_code != 200:
         raise Exception(f"上传失败: HTTP {response.status_code}")
     
     result = response.json()
-    
-    # 如果token过期且未重试，则重试
-    if result.get("ret") and "FAIL_SYS_TOKEN" in str(result["ret"]) and retry_count == 0:
-        st.info("Token过期，更新后重试上传...")
-        return upload_image(file_bytes, file_name, mime, retry_count=1)
     
     if not result.get('success'):
         raise Exception(f"上传失败: {result.get('message', '未知错误')}")
@@ -345,69 +249,14 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str, retry_count: int 
 
 # ==================== 商品操作 ====================
 
-def make_request_with_retry(url: str, headers: dict, cookies: dict, data: dict, max_retries: int = 2) -> dict:
-    """带重试的请求函数"""
-    for attempt in range(max_retries):
-        try:
-            response = session.post(url, headers=headers, cookies=cookies, data=data, timeout=20)
-            
-            # 更新token
-            token_updated = update_token_from_response(response)
-            
-            if response.status_code != 200:
-                raise Exception(f"HTTP错误: {response.status_code}")
-            
-            result = response.json()
-            
-            # 检查token是否过期
-            if result.get("ret") and ("FAIL_SYS_TOKEN" in str(result["ret"]) or "FAIL_SYS_TOKEN_EXOIRED" in str(result["ret"])):
-                if attempt < max_retries - 1:
-                    st.info(f"Token过期，第{attempt + 1}次重试...")
-                    time.sleep(1)
-                    # 如果有新token，更新到headers和cookies
-                    if token_updated:
-                        headers['_m_h5_tk'] = st.session_state.current_m_h5_tk
-                        cookies['_m_h5_tk'] = st.session_state.current_m_h5_tk
-                    continue
-                else:
-                    raise Exception(f"Token过期且重试失败: {result.get('ret')}")
-            
-            return result
-            
-        except Exception as e:
-            if attempt < max_retries - 1:
-                st.info(f"请求失败，第{attempt + 1}次重试: {str(e)[:50]}")
-                time.sleep(1)
-                continue
-            else:
-                raise e
-    
-    raise Exception("请求失败，已达最大重试次数")
-
 def get_item_detail(item_id: str) -> dict:
     """获取商品详情"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    
-    # 使用当前的 _m_h5_tk
-    m_h5_tk = st.session_state.current_m_h5_tk
-    token = st.session_state.current_token
-    
-    # 如果没有token，尝试使用默认值
-    if not token and st.session_state.auth_info.get("c_param"):
-        # 从c参数中提取token
-        c_param = st.session_state.auth_info["c_param"]
-        if '_' in c_param:
-            token = c_param.split('_')[0]
-            st.session_state.current_token = token
-            st.info(f"从c参数提取token: {token[:20]}...")
+    token = st.session_state.auth_info["token"]
+    c_param = st.session_state.auth_info["c_param"]
+    utdid = st.session_state.auth_info["utdid"]
     
     if not token:
-        raise Exception("Token为空，请检查请求头中是否包含有效的认证信息")
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    utdid = st.session_state.auth_info.get("utdid", FIXED_UTDID)
+        raise Exception("Token为空，请重新解析认证信息")
     
     # 构建请求数据
     data_obj = {
@@ -429,6 +278,7 @@ def get_item_detail(item_id: str) -> dict:
         "appKey": APP_KEY,
         "t": t,
         "sign": sign,
+        "c": c_param,
         "v": "1.0",
         "type": "originaljson",
         "accountSite": "xianyu",
@@ -437,10 +287,6 @@ def get_item_detail(item_id: str) -> dict:
         "api": "mtop.taobao.idle.weixin.detail",
         "_bx-m": "1",
     }
-    
-    # 添加c参数
-    if st.session_state.auth_info.get("c_param"):
-        params["c"] = st.session_state.auth_info["c_param"]
     
     url = f"{BASE_URL_DETAIL}?{urlencode(params)}"
     
@@ -453,30 +299,40 @@ def get_item_detail(item_id: str) -> dict:
     }
     
     # 添加特殊headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap']:
-        if h in st.session_state.auth_info.get('headers', {}):
-            headers[h] = st.session_state.auth_info['headers'][h]
+    if 'sgcookie' in st.session_state.auth_info['cookies']:
+        headers['sgcookie'] = st.session_state.auth_info['cookies']['sgcookie']
+    if 'bx-umidtoken' in st.session_state.auth_info['headers']:
+        headers['bx-umidtoken'] = st.session_state.auth_info['headers']['bx-umidtoken']
+    if 'x-ticid' in st.session_state.auth_info['headers']:
+        headers['x-ticid'] = st.session_state.auth_info['headers']['x-ticid']
+    if 'x-tap' in st.session_state.auth_info['headers']:
+        headers['x-tap'] = st.session_state.auth_info['headers']['x-tap']
     
-    # 使用带重试的请求
-    result = make_request_with_retry(url, headers, cookies, {"data": data_str})
+    cookies = {}
+    if 'sgcookie' in st.session_state.auth_info['cookies']:
+        cookies['sgcookie'] = st.session_state.auth_info['cookies']['sgcookie']
     
-    return result
+    response = session.post(
+        url,
+        headers=headers,
+        cookies=cookies,
+        data={"data": data_str},
+        timeout=20
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"HTTP错误: {response.status_code}")
+    
+    return response.json()
 
 def update_item_image(item_id: str, image_url: str) -> dict:
     """更新商品图片"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    
-    # 使用当前的 _m_h5_tk
-    m_h5_tk = st.session_state.current_m_h5_tk
-    token = st.session_state.current_token
+    token = st.session_state.auth_info["token"]
+    c_param = st.session_state.auth_info["c_param"]
+    utdid = st.session_state.auth_info["utdid"]
     
     if not token:
         raise Exception("Token为空，请重新解析认证信息")
-    
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-    
-    utdid = st.session_state.auth_info.get("utdid", FIXED_UTDID)
     
     # 构建请求数据
     data_obj = {
@@ -497,6 +353,7 @@ def update_item_image(item_id: str, image_url: str) -> dict:
         "appKey": APP_KEY,
         "t": t,
         "sign": sign,
+        "c": c_param,
         "v": "1.0",
         "type": "originaljson",
         "accountSite": "xianyu",
@@ -505,10 +362,6 @@ def update_item_image(item_id: str, image_url: str) -> dict:
         "api": "mtop.taobao.idle.item.update",
         "_bx-m": "1",
     }
-    
-    # 添加c参数
-    if st.session_state.auth_info.get("c_param"):
-        params["c"] = st.session_state.auth_info["c_param"]
     
     url = f"{BASE_URL_UPDATE}?{urlencode(params)}"
     
@@ -521,14 +374,31 @@ def update_item_image(item_id: str, image_url: str) -> dict:
     }
     
     # 添加特殊headers
-    for h in ['sgcookie', 'bx-umidtoken', 'x-ticid', 'x-tap']:
-        if h in st.session_state.auth_info.get('headers', {}):
-            headers[h] = st.session_state.auth_info['headers'][h]
+    if 'sgcookie' in st.session_state.auth_info['cookies']:
+        headers['sgcookie'] = st.session_state.auth_info['cookies']['sgcookie']
+    if 'bx-umidtoken' in st.session_state.auth_info['headers']:
+        headers['bx-umidtoken'] = st.session_state.auth_info['headers']['bx-umidtoken']
+    if 'x-ticid' in st.session_state.auth_info['headers']:
+        headers['x-ticid'] = st.session_state.auth_info['headers']['x-ticid']
+    if 'x-tap' in st.session_state.auth_info['headers']:
+        headers['x-tap'] = st.session_state.auth_info['headers']['x-tap']
     
-    # 使用带重试的请求
-    result = make_request_with_retry(url, headers, cookies, {"data": data_str})
+    cookies = {}
+    if 'sgcookie' in st.session_state.auth_info['cookies']:
+        cookies['sgcookie'] = st.session_state.auth_info['cookies']['sgcookie']
     
-    return result
+    response = session.post(
+        url,
+        headers=headers,
+        cookies=cookies,
+        data={"data": data_str},
+        timeout=20
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"HTTP错误: {response.status_code}")
+    
+    return response.json()
 
 # ==================== 图片下载 ====================
 
@@ -580,25 +450,17 @@ def main():
     
     request_text = st.text_area(
         "HTTP请求头",
-        height=500,
-        placeholder="粘贴完整的HTTP请求头，例如：\nPOST /h5/mtop.taobao.idle.weixin.detail/1.0/2.0/?... HTTP/2\nhost: acs.m.goofish.com\n...\ndata=%7B%22utdid%22%3A...%7D"
+        height=400,
+        placeholder="粘贴完整的HTTP请求头..."
     )
     
     if st.button("解析认证信息", use_container_width=True):
         if request_text:
             if update_auth_info(request_text):
-                st.session_state.auth_parsed = True
                 st.success("✅ 认证信息解析成功")
-                
-                # 显示解析结果
-                if st.session_state.current_token:
-                    st.info(f"✅ token: {st.session_state.current_token[:30]}...")
-                if st.session_state.current_m_h5_tk:
-                    st.info(f"✅ _m_h5_tk: {st.session_state.current_m_h5_tk[:50]}...")
-                if st.session_state.auth_info.get("utdid"):
-                    st.info(f"✅ utdid: {st.session_state.auth_info['utdid']}")
-                if st.session_state.auth_info.get("c_param"):
-                    st.info(f"✅ c参数: {st.session_state.auth_info['c_param'][:50]}...")
+                st.info(f"Token: {st.session_state.auth_info['token'][:30]}...")
+                st.info(f"c参数: {st.session_state.auth_info['c_param'][:50]}...")
+                st.info(f"utdid: {st.session_state.auth_info['utdid']}")
             else:
                 st.error("❌ 解析失败，请检查格式")
     
@@ -735,8 +597,7 @@ def main():
                "3. 程序会自动提取 token 和认证信息\n"
                "4. 输入商品ID，点击获取当前图片确认商品\n"
                "5. 选择新图片（支持URL或本地上传）\n"
-               "6. 点击开始修改商品图片\n"
-               "7. 程序会自动处理token更新和重试")
+               "6. 点击开始修改商品图片")
 
 if __name__ == "__main__":
     main()
