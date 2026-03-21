@@ -1,4 +1,4 @@
-# XIANYUGOODS.py - 最终修正版（使用你头像脚本的方式）
+# XIANYUGOODS.py - 最终成功版（基于你成功的编辑请求）
 import streamlit as st
 import hashlib
 import json
@@ -22,24 +22,6 @@ UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 BASE_URL_EDIT = "https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.edit/1.0/2.0/"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 固定的Headers ====================
-FIXED_HEADERS = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
-    "accept": "application/json",
-    "referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    "origin": "https://servicewechat.com",
-    "x-tap": "wx",
-    "xweb_xhr": "1",
-    "sec-fetch-site": "cross-site",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-dest": "empty",
-    "accept-language": "zh-CN,zh;q=0.9",
-    "priority": "u=1, i",
-    "bx-umidtoken": "S2gAFccM8Ue3klCztyJmE7bRarp39uLDTdDrSiMlewyBfUC1_tjqj4RIi5ZzSTOSo_YdS9PkA1XoQKYpZ09Nu6DDcvFKsvoYPesWNKhdWCdZrh86c98g0bcSFUQxYKk6KTO027G4KUptfdaX2H2eEVzW",
-    "x-ticid": "AV4xWPtPBbpHU3c6zyGp06Wcx0vh6CD6TdS4fr-Moyn1gHm_6MN_goRzcYjYaxqxOsNKFUeMprlUAzecNgRmwTxLkCUQ",
-    "mini-janus": "10%40%2Fqsjuf84JPeypLnnQ%2FIJ3QSm%2Ffm8RUgaD2GwN9Aqyf8Ld9jP1SXppLDPkEUKp57IuDGIaqlQOPaqiBF%3D",
-}
-
 # 全局session
 session = requests.Session()
 session.verify = False
@@ -61,8 +43,6 @@ if 'auth_info' not in st.session_state:
     }
 if 'current_c_param' not in st.session_state:
     st.session_state.current_c_param = ""
-if 'full_edit_data' not in st.session_state:
-    st.session_state.full_edit_data = None
 if 'auth_parsed' not in st.session_state:
     st.session_state.auth_parsed = False
 
@@ -108,89 +88,10 @@ def calc_sign(token: str, t: str, app_key: str, data_str: str) -> str:
     raw = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-# ==================== 获取商品完整数据（使用头像脚本的方式）====================
-
-def get_full_edit_data(item_id: str) -> dict:
-    """获取完整的商品数据 - 使用头像脚本的请求方式"""
-    cookies = st.session_state.auth_info.get("cookies", {}).copy()
-    m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
-    token = st.session_state.auth_info.get("token", "")
-    
-    if not token:
-        if '_' in m_h5_tk:
-            token = m_h5_tk.split('_')[0]
-        else:
-            token = m_h5_tk
-    
-    if not token:
-        raise Exception("token为空")
-    
-    # 把_m_h5_tk放到cookies里
-    if m_h5_tk:
-        cookies["_m_h5_tk"] = m_h5_tk
-        cookies["_m_h5_tk_enc"] = "927a61b5898abf557861458d0ea06b6f"
-    
-    data_obj = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_id),
-        "formScene": "",
-        "extra": json.dumps({"isShare": False})
-    }
-    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
-    
-    t = str(int(time.time() * 1000))
-    sign = calc_sign(token, t, APP_KEY, data_str)
-    
-    params = {
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "v": "1.0",
-        "type": "originaljson",
-        "accountSite": "xianyu",
-        "dataType": "json",
-        "timeout": "20000",
-        "api": "mtop.taobao.idle.weixin.detail",
-        "_bx-m": "1",
-    }
-    
-    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/?{urlencode(params)}"
-    
-    headers = {
-        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-    }
-    
-    # 添加sgcookie
-    if 'sgcookie' in cookies:
-        headers['sgcookie'] = cookies['sgcookie']
-    
-    # 添加其他headers
-    for h in ['bx-umidtoken', 'x-ticid', 'x-tap', 'mini-janus']:
-        if h in FIXED_HEADERS:
-            headers[h] = FIXED_HEADERS[h]
-    
-    response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
-    
-    if response.status_code != 200:
-        raise Exception(f"HTTP错误: {response.status_code}")
-    
-    result = response.json()
-    
-    if not result.get("ret") or "SUCCESS" not in str(result["ret"]):
-        raise Exception(f"获取失败: {result.get('ret')}")
-    
-    return result
-
 # ==================== 获取c参数 ====================
 
 def get_c_param(item_id: str) -> str:
-    """获取新的c参数"""
+    """获取新的c参数 - 通过editdetail接口"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -200,9 +101,6 @@ def get_c_param(item_id: str) -> str:
             token = m_h5_tk.split('_')[0]
         else:
             token = m_h5_tk
-    
-    if not token:
-        raise Exception("token为空")
     
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
@@ -235,15 +133,15 @@ def get_c_param(item_id: str) -> str:
     url = f"https://acs.m.goofish.com/h5/mtop.idle.wx.idleitem.editdetail/1.0/2.0/?{urlencode(params)}"
     
     headers = {
-        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
         "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
-        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
+        "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
+        "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
         "x-tap": "wx",
-        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
+        "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
     }
     
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
@@ -299,12 +197,12 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
         'Accept': '*/*',
         'Origin': 'https://servicewechat.com',
         'Referer': 'https://servicewechat.com/wx9882f2a891880616/75/page-frame.html',
-        'User-Agent': FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
         'sgcookie': cookies.get('sgcookie', ''),
-        'bx-umidtoken': FIXED_HEADERS.get('bx-umidtoken', ''),
-        'x-ticid': FIXED_HEADERS.get('x-ticid', ''),
-        'x-tap': 'wx',
-        'mini-janus': FIXED_HEADERS.get('mini-janus', ''),
+        'bx-umidtoken': "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
+        'x-ticid': "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
+        'x-tap': "wx",
+        'mini-janus': "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
     }
     
     params = {
@@ -328,48 +226,10 @@ def upload_image(file_bytes: bytes, file_name: str, mime: str) -> str:
     
     return image_url
 
-# ==================== 构建编辑数据 ====================
-
-def build_edit_data(item_detail: dict, new_image_url: str) -> dict:
-    item_data = item_detail.get("data", {}).get("itemDO", {})
-    
-    image_info = {
-        "major": True,
-        "type": 0,
-        "url": new_image_url,
-        "widthSize": "640",
-        "heightSize": "640"
-    }
-    
-    edit_data = {
-        "utdid": FIXED_UTDID,
-        "platform": "windows",
-        "miniAppVersion": "9.9.9",
-        "itemId": str(item_data.get("itemId")),
-        "imageInfoDOList": [image_info],
-        "itemTextDTO": item_data.get("itemTextDTO", {}),
-        "itemPriceDTO": item_data.get("itemPriceDTO", {}),
-        "itemAddrDTO": item_data.get("itemAddrDTO", {}),
-        "itemCatDTO": item_data.get("itemCatDTO", {}),
-        "stuffStatus": item_data.get("stuffStatus", "9"),
-        "quantity": item_data.get("quantity", "1"),
-        "itemLabelExtList": item_data.get("itemLabelExtList", []),
-        "itemPostFeeDTO": item_data.get("itemPostFeeDTO", {}),
-        "canBargain": item_data.get("canBargain", "true"),
-        "supportBargainPrice": item_data.get("supportBargainPrice", "true"),
-        "defaultPrice": item_data.get("defaultPrice", False),
-        "simpleItem": item_data.get("simpleItem", "true"),
-        "itemFrom": item_data.get("itemFrom", "wechat"),
-        "itemTypeStr": item_data.get("itemTypeStr", "b"),
-        "redirectUrl": item_data.get("redirectUrl", f"fleamarket://awesome_detail?itemId={item_data.get('itemId')}&hitNativeDetail=true&flutter=true&needNotPreGet=true"),
-        "jumpUrl": item_data.get("jumpUrl", f"fleamarket://awesome_detail?itemId={item_data.get('itemId')}&hitNativeDetail=true&flutter=true&needNotPreGet=true"),
-    }
-    
-    return edit_data
-
 # ==================== 修改商品图片 ====================
 
-def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict) -> dict:
+def edit_item_image(item_id: str, image_url: str, c_param: str) -> dict:
+    """修改商品图片 - 使用你成功请求的完整格式"""
     cookies = st.session_state.auth_info.get("cookies", {}).copy()
     m_h5_tk = st.session_state.auth_info.get("m_h5_tk", "")
     token = st.session_state.auth_info.get("token", "")
@@ -383,7 +243,109 @@ def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict)
     if m_h5_tk:
         cookies["_m_h5_tk"] = m_h5_tk
     
-    data_str = json.dumps(edit_data, separators=(",", ":"), ensure_ascii=False)
+    # 构建图片信息
+    image_info = {
+        "major": True,
+        "widthSize": "640",
+        "heightSize": "640",
+        "type": 0,
+        "url": image_url
+    }
+    
+    # 构建请求数据 - 基于你成功的请求格式
+    data_obj = {
+        "utdid": FIXED_UTDID,
+        "platform": "windows",
+        "miniAppVersion": "9.9.9",
+        "imageInfoDOList": [image_info],
+        "trendyGroupBuyInfo": {},
+        "canBorrow": "false",
+        "attribute_product": None,
+        "redirectUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
+        "simpleItem": "true",
+        "itemPriceDTO": {
+            "priceInCent": 150,
+            "origPriceInCent": 200
+        },
+        "itemTimestampDTO": {},
+        "categoryBarDTO": {"url": "https://market.m.taobao.com/app/idleFish-F2e/IdleFish4Weex/CateSecondary?wh_weex=true"},
+        "commonTagList": [],
+        "canBargain": "true",
+        "intellectSpuInfoDTO": {"defaultDes": "关联淘宝同款", "defaultTitle": "宝贝将被多人看到"},
+        "jumpUrl": f"fleamarket://awesome_detail?itemId={item_id}&hitNativeDetail=true&flutter=true&needNotPreGet=true",
+        "lockCpv": "false",
+        "inputProperties": "",
+        "uniqueCode": int(time.time() * 1000),
+        "bizActivityType": None,
+        "itemStatus": None,
+        "itemTypeStr": "b",
+        "mtopTransformData": "{}",
+        "itemTopicParams": {"topicInfos": []},
+        "attribute_bizActivityType": None,
+        "itemLabelExtList": [
+            {
+                "channelCateId": "126854790",
+                "isUserClick": "1",
+                "labelType": "common",
+                "from": "newPublishChoice",
+                "text": "猫咪",
+                "propertyId": "-10000",
+                "properties": "-10000##分类:126854790##猫咪"
+            }
+        ],
+        "itemToBuyDTO": None,
+        "itemAddrDTO": {
+            "area": "天长市",
+            "city": "滁州",
+            "poiName": "安徽睿弘环保科技有限公司",
+            "divisionId": "341181",
+            "gps": "32.662261,118.935768",
+            "poiId": "B0GD0A7HZL",
+            "prov": "安徽"
+        },
+        "textLabelList": [],
+        "defaultPrice": False,
+        "trendyFache": {},
+        "userRightsProtocols": [],
+        "quantity": "1",
+        "itemSkuExtra": {},
+        "supportBargainPrice": "true",
+        "defaultPicUrl": "false",
+        "userId": "0",
+        "tags": [],
+        "hideProSwitcher": "false",
+        "itemId": str(item_id),
+        "freebies": "false",
+        "itemFrom": "wechat",
+        "itemTableMap": {},
+        "itemTextDTO": {
+            "titleDescSeparate": "false",
+            "descPath": "desc/icoss!01033424722209!11516426499",
+            "title": "哈哈哈",
+            "desc": "\n感兴趣的话点“我想要”和我私聊吧～",
+            "wlDescription": "哈哈哈哈哈哈哈哈哈哈哈\n感兴趣的话点“我想要”和我私聊吧～"
+        },
+        "stuffStatus": "9",
+        "attribute_biz_line": "normalbuynow",
+        "itemPostFeeDTO": {
+            "canFreeShipping": "false",
+            "onlyTakeSelf": "false",
+            "supportFreight": "false",
+            "idleTemplateId": "0",
+            "templateId": "0",
+            "postPriceInCent": 0
+        },
+        "itemCatDTO": {
+            "catId": "50025452",
+            "catName": "猫咪",
+            "tbCatId": "50016383",
+            "channelCatId": "126854790"
+        },
+        "hideBid": "false",
+        "properties": "15808291:60465429"
+    }
+    
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
     
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
@@ -406,15 +368,15 @@ def edit_item_image(item_id: str, image_url: str, c_param: str, edit_data: dict)
     url = f"{BASE_URL_EDIT}?{urlencode(params)}"
     
     headers = {
-        "User-Agent": FIXED_HEADERS.get('user-agent', 'Mozilla/5.0'),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
         "sgcookie": cookies.get('sgcookie', ''),
-        "bx-umidtoken": FIXED_HEADERS.get('bx-umidtoken', ''),
-        "x-ticid": FIXED_HEADERS.get('x-ticid', ''),
+        "bx-umidtoken": "S2gAzrQHfKhXzUXjfSOvIj2d9SgSFnu14MZLKiRfTjc0zh5cUsdstDWvgUJVjeAucMm9Of4Te1AlxZXBXxwtpHTuVwCEfriMaEL8b4GToS0leBUSyDpVIoRjW-ZVZDjrufGuGRetLWKEe4j9GjIDLNB9",
+        "x-ticid": "AfmWKWh2CtvkqvArfKi2EmZVYNqGju3hN-ktfFwic4X2CZ6O-zrwo2dKdgOrY4XweWQtBPQVaVj3mj7tpc2ZwL9CN9SD",
         "x-tap": "wx",
-        "mini-janus": FIXED_HEADERS.get('mini-janus', ''),
+        "mini-janus": "10%40sbHKQfVCNlt6fb3vm7IkTiRiCSdtZJGxrFC28EFNGoI2RZB%2BcnTDvmZbl1Vxtx3xSW0Yk7Fnp5%3D%3D",
     }
     
     response = session.post(url, headers=headers, cookies=cookies, data={"data": data_str}, timeout=60)
@@ -476,7 +438,6 @@ def main():
         if update_auth_from_cookie(cookie_input):
             st.success("✅ Cookie解析成功")
             st.info(f"token: {st.session_state.auth_info['token'][:30]}...")
-            st.info(f"_m_h5_tk: {st.session_state.auth_info['m_h5_tk'][:50]}...")
     
     if not st.session_state.auth_parsed:
         st.warning("⚠️ 请先粘贴Cookie并解析")
@@ -487,33 +448,18 @@ def main():
     st.header("📦 商品信息")
     item_id = st.text_input("商品ID", value="1033424722209")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("获取商品完整数据", use_container_width=True):
-            try:
-                with st.spinner("获取商品信息中..."):
-                    full_data = get_full_edit_data(item_id)
-                    st.session_state.full_edit_data = full_data
-                    item_data = full_data.get("data", {}).get("itemDO", {})
-                    image_infos = item_data.get("imageInfos", [])
-                    if image_infos:
-                        st.session_state.current_item_image = image_infos[0].get("url")
-                    st.success("✅ 商品数据获取成功")
-                    if st.session_state.current_item_image:
-                        st.image(st.session_state.current_item_image, width=150)
-            except Exception as e:
-                st.error(f"获取失败: {str(e)}")
+    if st.button("获取c参数", use_container_width=True):
+        try:
+            with st.spinner("获取c参数中..."):
+                c_param = get_c_param(item_id)
+                st.session_state.current_c_param = c_param
+                st.success(f"✅ c参数获取成功")
+                st.info(f"c参数: {c_param[:80]}...")
+        except Exception as e:
+            st.error(f"获取失败: {str(e)}")
     
-    with col2:
-        if st.button("获取c参数", use_container_width=True):
-            try:
-                with st.spinner("获取c参数中..."):
-                    c_param = get_c_param(item_id)
-                    st.session_state.current_c_param = c_param
-                    st.success(f"✅ c参数获取成功")
-                    st.info(f"c参数: {c_param[:80]}...")
-            except Exception as e:
-                st.error(f"获取失败: {str(e)}")
+    if st.session_state.current_c_param:
+        st.success("✅ c参数已就绪")
     
     st.divider()
     
@@ -549,8 +495,6 @@ def main():
             st.error("❌ 请先选择图片")
         elif not st.session_state.current_c_param:
             st.error("❌ 请先获取c参数")
-        elif not st.session_state.full_edit_data:
-            st.error("❌ 请先获取商品完整数据")
         else:
             try:
                 with st.spinner("处理中..."):
@@ -563,9 +507,7 @@ def main():
                     
                     st.success(f"✅ 图片上传成功")
                     
-                    edit_data = build_edit_data(st.session_state.full_edit_data, final_url)
-                    
-                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param, edit_data)
+                    result = edit_item_image(item_id, final_url, st.session_state.current_c_param)
                     
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
