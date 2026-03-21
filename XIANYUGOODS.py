@@ -1,4 +1,4 @@
-# app_item_image.py - 闲鱼商品图片修改工具（简化版）
+# app_item_image.py - 闲鱼商品图片修改工具（最终修复版）
 import streamlit as st
 import hashlib
 import json
@@ -39,20 +39,11 @@ if 'auth_info' not in st.session_state:
     st.session_state.auth_info = {
         "cookies": {},
         "headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541022) XWEB/16467",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json",
-            "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
         },
         "utdid": FIXED_UTDID,
-        "token": None,
-        "m_h5_tk": None,
     }
-
-if 'preview_url' not in st.session_state:
-    st.session_state.preview_url = None
-
-if 'uploaded_file' not in st.session_state:
-    st.session_state.uploaded_file = None
 
 if 'cookie_parsed' not in st.session_state:
     st.session_state.cookie_parsed = False
@@ -60,15 +51,48 @@ if 'cookie_parsed' not in st.session_state:
 if 'current_item_image' not in st.session_state:
     st.session_state.current_item_image = None
 
-if 'item_info' not in st.session_state:
-    st.session_state.item_info = None
-
 # ==================== 工具函数 ====================
+
+def extract_cookie_from_http_request(request_text: str) -> dict:
+    """从HTTP请求文本中提取Cookie"""
+    cookies = {}
+    lines = request_text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        # 查找Cookie行
+        if line.lower().startswith('cookie:'):
+            cookie_str = line[7:].strip()
+            # 解析cookie
+            items = cookie_str.split(';')
+            for item in items:
+                item = item.strip()
+                if '=' in item:
+                    key, value = item.split('=', 1)
+                    cookies[key.strip()] = value.strip()
+            break
+        
+        # 也查找单独的sgcookie
+        if line.lower().startswith('sgcookie:'):
+            cookies['sgcookie'] = line[9:].strip()
+        
+        # 查找_m_h5_tk
+        if '_m_h5_tk' in line and '=' in line:
+            parts = line.split(';')
+            for part in parts:
+                if '_m_h5_tk' in part and '=' in part:
+                    key, value = part.split('=', 1)
+                    if key.strip() == '_m_h5_tk':
+                        cookies['_m_h5_tk'] = value.strip()
+    
+    return cookies
 
 def parse_cookie_string(cookie_str: str) -> dict:
     """解析cookie字符串为字典"""
     cookies = {}
     try:
+        # 清理字符串中的换行符
+        cookie_str = cookie_str.replace('\n', '').replace('\r', '')
         items = cookie_str.split(';')
         for item in items:
             item = item.strip()
@@ -98,6 +122,41 @@ def update_auth_info_from_cookie(cookie_str: str):
         st.session_state.auth_info["m_h5_tk"] = m_h5_tk
         st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
         st.session_state.current_m_h5_tk = m_h5_tk
+    
+    return True
+
+def update_auth_info_from_http_request(request_text: str):
+    """从HTTP请求文本更新认证信息"""
+    cookies = extract_cookie_from_http_request(request_text)
+    
+    if not cookies:
+        return False
+    
+    st.session_state.auth_info["cookies"] = cookies
+    
+    # 提取sgcookie
+    if 'sgcookie' in cookies:
+        st.session_state.auth_info["headers"]["sgcookie"] = cookies['sgcookie']
+    
+    # 提取_m_h5_tk
+    if '_m_h5_tk' in cookies:
+        m_h5_tk = cookies['_m_h5_tk']
+        st.session_state.auth_info["m_h5_tk"] = m_h5_tk
+        st.session_state.auth_info["token"] = m_h5_tk.split('_')[0] if '_' in m_h5_tk else m_h5_tk
+        st.session_state.current_m_h5_tk = m_h5_tk
+    
+    # 也提取x-smallstc中的信息
+    for line in request_text.split('\n'):
+        if 'x-smallstc:' in line.lower():
+            try:
+                import json as json_lib
+                xsmallstc_str = line.split(':', 1)[1].strip()
+                xsmallstc = json_lib.loads(xsmallstc_str)
+                if 'sgcookie' in xsmallstc:
+                    st.session_state.auth_info["headers"]["sgcookie"] = xsmallstc['sgcookie']
+            except:
+                pass
+            break
     
     return True
 
@@ -207,7 +266,9 @@ def get_item_detail(item_id: str) -> dict:
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
     
-    # 构建URL参数
+    # 构建URL
+    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/"
+    
     params = {
         "jsv": "2.4.12",
         "appKey": APP_KEY,
@@ -222,8 +283,6 @@ def get_item_detail(item_id: str) -> dict:
         "_bx-m": "1",
     }
     
-    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.weixin.detail/1.0/2.0/?{urlencode(params)}"
-    
     headers = {
         "User-Agent": st.session_state.auth_info['headers']['User-Agent'],
         "Content-Type": "application/x-www-form-urlencoded",
@@ -237,6 +296,7 @@ def get_item_detail(item_id: str) -> dict:
     # 发送请求
     response = st.session_state.session.post(
         url,
+        params=params,
         headers=headers,
         cookies=cookies,
         data={"data": data_str},
@@ -273,7 +333,9 @@ def update_item_image(item_id: str, image_url: str) -> dict:
     t = str(int(time.time() * 1000))
     sign = calc_sign(token, t, APP_KEY, data_str)
     
-    # 构建URL参数
+    # 构建URL
+    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.item.update/1.0/"
+    
     params = {
         "jsv": "2.4.12",
         "appKey": APP_KEY,
@@ -288,8 +350,6 @@ def update_item_image(item_id: str, image_url: str) -> dict:
         "_bx-m": "1",
     }
     
-    url = f"https://acs.m.goofish.com/h5/mtop.taobao.idle.item.update/1.0/?{urlencode(params)}"
-    
     headers = {
         "User-Agent": st.session_state.auth_info['headers']['User-Agent'],
         "Content-Type": "application/x-www-form-urlencoded",
@@ -303,6 +363,7 @@ def update_item_image(item_id: str, image_url: str) -> dict:
     # 发送请求
     response = st.session_state.session.post(
         url,
+        params=params,
         headers=headers,
         cookies=cookies,
         data={"data": data_str},
@@ -314,7 +375,7 @@ def update_item_image(item_id: str, image_url: str) -> dict:
     
     return response.json()
 
-def download_image_from_url(url: str) -> Tuple[bytes, str, str]:
+def download_image_from_url(url: str):
     """从URL下载图片"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
@@ -360,25 +421,27 @@ def main():
     # 认证信息配置
     st.header("🔑 认证信息配置")
     
-    cookie_input = st.text_area(
-        "Cookie字符串",
-        height=150,
-        placeholder="在这里粘贴完整的Cookie字符串...\n\n例如: _m_h5_tk=xxx; sgcookie=xxx; ..."
+    st.info("请粘贴从浏览器复制的完整HTTP请求头（包含Cookie信息）")
+    
+    request_text = st.text_area(
+        "HTTP请求头",
+        height=300,
+        placeholder="粘贴完整的HTTP请求头，例如：\nPOST /h5/mtop.taobao.idle.weixin.detail/1.0/2.0/...\nhost: acs.m.goofish.com\ncookie: _m_h5_tk=xxx; sgcookie=xxx\n..."
     )
     
-    if st.button("解析Cookie", use_container_width=True):
-        if cookie_input:
-            if update_auth_info_from_cookie(cookie_input):
+    if st.button("解析认证信息", use_container_width=True):
+        if request_text:
+            # 先尝试从HTTP请求中提取
+            if update_auth_info_from_http_request(request_text):
                 st.session_state.cookie_parsed = True
-                st.success("✅ Cookie解析成功")
-                # 显示解析到的关键信息
+                st.success("✅ 认证信息解析成功")
                 if st.session_state.current_m_h5_tk:
                     st.info(f"已获取 _m_h5_tk: {st.session_state.current_m_h5_tk[:30]}...")
             else:
-                st.error("❌ Cookie解析失败，请检查格式")
+                st.error("❌ 解析失败，请检查格式")
     
     if not st.session_state.cookie_parsed:
-        st.warning("⚠️ 请先配置并解析Cookie")
+        st.warning("⚠️ 请先配置并解析认证信息")
         return
     
     st.divider()
@@ -405,14 +468,18 @@ def main():
                         if image_infos:
                             current_image_url = image_infos[0].get("url", "")
                             st.session_state.current_item_image = current_image_url
-                            st.session_state.item_info = {
-                                "title": item_data.get("title", ""),
-                                "desc": item_data.get("desc", ""),
-                                "price": item_data.get("soldPrice", ""),
-                                "image_count": len(image_infos)
-                            }
                             st.success("✅ 获取商品信息成功")
-                            st.rerun()
+                            
+                            # 显示商品信息
+                            st.subheader("当前商品信息")
+                            col1, col2 = st.columns([1, 2])
+                            with col1:
+                                st.image(current_image_url, width=200)
+                            with col2:
+                                st.write(f"**标题:** {item_data.get('title', '')}")
+                                st.write(f"**描述:** {item_data.get('desc', '')[:100]}...")
+                                st.write(f"**价格:** {item_data.get('soldPrice', '')}元")
+                                st.write(f"**图片数量:** {len(image_infos)}张")
                         else:
                             st.warning("未找到商品图片")
                     else:
@@ -420,20 +487,6 @@ def main():
                         st.error(f"获取商品信息失败: {error_msg}")
             except Exception as e:
                 st.error(f"获取商品信息失败: {str(e)}")
-        
-        # 显示商品信息
-        if st.session_state.get('current_item_image'):
-            st.subheader("当前商品信息")
-            
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.image(st.session_state.current_item_image, width=200)
-            with col2:
-                if st.session_state.item_info:
-                    st.write(f"**标题:** {st.session_state.item_info['title']}")
-                    st.write(f"**描述:** {st.session_state.item_info['desc'][:100]}...")
-                    st.write(f"**价格:** {st.session_state.item_info['price']}元")
-                    st.write(f"**图片数量:** {st.session_state.item_info['image_count']}张")
     
     st.divider()
     
@@ -505,14 +558,9 @@ def main():
                     if result.get("ret") and "SUCCESS" in str(result["ret"]):
                         st.success("✅ 商品图片修改成功！")
                         st.balloons()
-                        # 清除缓存
-                        st.session_state.current_item_image = None
-                        st.session_state.item_info = None
                     else:
                         error_msg = result.get("ret", ["未知错误"])[0]
                         st.error(f"❌ 修改失败: {error_msg}")
-                        if "ret" in result:
-                            st.json(result.get("ret"))
                         
             except Exception as e:
                 st.error(f"❌ 修改失败: {str(e)}")
@@ -520,8 +568,8 @@ def main():
     # 底部说明
     st.divider()
     st.caption("💡 使用说明：\n"
-               "1. 从浏览器获取完整的Cookie字符串\n"
-               "2. 粘贴Cookie并点击解析\n"
+               "1. 从浏览器开发者工具复制完整的HTTP请求头\n"
+               "2. 粘贴到上方文本框并点击解析\n"
                "3. 输入商品ID，点击获取当前图片确认商品\n"
                "4. 选择新图片（支持URL或本地上传）\n"
                "5. 点击开始修改商品图片")
