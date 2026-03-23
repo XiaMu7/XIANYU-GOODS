@@ -26,41 +26,69 @@ def get_mtop_sign(token: str, t: str, app_key: str, data_str: str) -> str:
 
 def force_extract_tk(session, raw_text=""):
     """多渠道暴力提取 _m_h5_tk"""
-    # 优先从 Session Cookies 拿
+    # 1. 优先从 Session Cookies 拿
     tk = session.cookies.get("_m_h5_tk")
     if tk: return tk
-    # 其次从原始文本正则匹配
+    # 2. 其次从原始文本正则匹配
     match = re.search(r'_m_h5_tk=([^; ]+)', raw_text)
     if match: return match.group(1).strip()
     return None
 
 def parse_input_to_session(session, raw_text):
-    """解析 Headers 或纯 Cookie 并注入 Session"""
+    """
+    深度解析：自动从 Headers, Cookie 字符串, 或 x-smallstc JSON 中拼凑凭证
+    """
     headers = {}
+    
+    # --- 核心增强：解析 x-smallstc 中的隐藏 JSON ---
+    stc_match = re.search(r'x-smallstc:\s*({.+})', raw_text)
+    if stc_match:
+        try:
+            stc_json = json.loads(stc_match.group(1))
+            for key in ['cookie2', 'sgcookie', 'sid', 'unb']:
+                if key in stc_json:
+                    val = str(stc_json[key])
+                    # 注入到多个相关域名下确保覆盖
+                    for domain in [".goofish.com", ".m.goofish.com", "acs.m.goofish.com"]:
+                        session.cookies.set(key, val, domain=domain)
+        except Exception as e:
+            st.sidebar.error(f"解析 x-smallstc 失败: {e}")
+
+    # --- 常规行解析 ---
     lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
     for line in lines:
         if line.startswith(('POST ', 'GET ', 'HTTP/')): continue
+        
         if ':' in line:
             k, v = line.split(':', 1)
-            k, v = k.strip().lower(), v.strip()
-            if k == 'cookie':
-                for item in v.split(';'):
+            k_low, v_val = k.strip().lower(), v.strip()
+            if k_low == 'cookie':
+                # 提取 Cookie 字符串并注入
+                for item in v_val.split(';'):
                     if '=' in item:
                         ck, cv = item.strip().split('=', 1)
                         session.cookies.set(ck.strip(), cv.strip())
             else:
-                headers[k] = v
-        elif '=' in line: # 适配纯 Cookie 字符串
+                headers[k_low] = v_val
+        elif '=' in line and ';' in line:
+            # 处理纯 Cookie 字符串
             for item in line.split(';'):
                 if '=' in item:
                     ck, cv = item.strip().split('=', 1)
                     session.cookies.set(ck.strip(), cv.strip())
+
+    # --- 模拟微信小程序环境指纹 ---
+    headers.update({
+        "x-tap": "wx", 
+        "xweb_xhr": "1",
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.69(0x18004534) NetType/WIFI Language/zh_CN"
+    })
     
-    # 注入必备 Header 指纹
-    headers.update({"x-tap": "wx", "xweb_xhr": "1"})
-    # 移除可能引起冲突的头
-    for k in ['content-length', 'host', 'content-type', 'connection', 'priority']:
+    # 移除请求冲突头
+    for k in ['content-length', 'host', 'connection', 'content-type', 'priority']:
         headers.pop(k, None)
+        
     return headers
 
 # ==================== 业务执行模块 ====================
@@ -74,11 +102,11 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
     current_tk = force_extract_tk(session, raw_input)
     
     if not current_tk:
-        return False, "❌ 未能识别到 _m_h5_tk。请确保粘贴了完整的 Cookie。"
+        return False, "❌ 报文中未发现 _m_h5_tk。请点开小程序首页刷新后再抓包，或手动补全该字段。"
 
     try:
         # --- 步骤 A: 上传图片 ---
-        st.info(f"正在上传图片... (当前Token: {current_tk[:6]}...)")
+        st.info(f"正在上传图片... (Token前缀: {current_tk[:6]}...)")
         t1 = str(int(time.time() * 1000))
         biz_data = json.dumps({"bizCode": "idleItemEdit", "clientType": "pc", "utdid": FIXED_UTDID})
         sign1 = get_mtop_sign(current_tk, t1, APP_KEY, biz_data)
@@ -95,14 +123,12 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
         img_url = img_match.group(1).replace('\\/', '/')
         st.success(f"图片上传成功")
 
-        # --- 核心：动态更新 Token ---
+        # --- 动态更新 Token (应对 Token 翻转) ---
         new_tk = force_extract_tk(session)
-        if new_tk: 
-            current_tk = new_tk
-            st.caption("✨ 令牌已自动完成第二阶段同步")
+        if new_tk: current_tk = new_tk
 
         # --- 步骤 B: 修改商品主图 ---
-        st.info("正在更新闲鱼商品信息...")
+        st.info("正在更新闲鱼商品主图...")
         t2 = str(int(time.time() * 1000))
         edit_data = {
             "itemId": str(item_id),
@@ -114,7 +140,6 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
         
         edit_params = {"jsv":"2.4.12","appKey":APP_KEY,"t":t2,"sign":sign2,"v":"1.0","api":EDIT_API,"accountSite":"xianyu","type":"originaljson"}
         
-        # 必须模拟 Form 表单提交
         headers["content-type"] = "application/x-www-form-urlencoded"
         payload = f"data={urllib.parse.quote(edit_json)}"
         
@@ -123,7 +148,7 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
         
         result = res_edit.json()
         if "SUCCESS" in str(result.get("ret")):
-            return True, "🎊 商品同步成功！主图已更新。"
+            return True, "🎊 同步成功！主图已替换。"
         else:
             return False, f"同步失败: {result.get('ret')}"
 
@@ -132,29 +157,30 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
 
 # ==================== Streamlit 界面 ====================
 
-st.set_page_config(page_title="闲鱼主图助手V10", layout="wide")
-st.title("🐠 闲鱼微信主图同步助手")
+st.set_page_config(page_title="闲鱼主图同步助手", layout="wide")
+st.title("🐠 闲鱼微信主图同步助手 (增强版)")
 
-with st.expander("📖 使用说明"):
-    st.write("1. 在微信闲鱼小程序打开‘编辑宝贝’。")
-    st.write("2. 抓取 `mtop.idle.wx.idleitem.edit` 请求。")
-    st.write("3. 将 **Headers** 或 **Cookie** 粘贴到下方，点击启动。")
+with st.expander("📝 必读提示", expanded=True):
+    st.markdown("""
+    1. **Token 必不可少**：代码虽强，但 `_m_h5_tk` 是阿里校验的死穴。如果你粘贴的内容里没有它，脚本无法替你凭空生成。
+    2. **获取方法**：在小程序点开任意宝贝，搜索含有 `_m_h5_tk` 的任意请求，复制其 Cookie 即可。
+    """)
 
-c1, c2 = st.columns(2)
+c1, c2 = st.columns([1.2, 1])
 
 with c1:
-    st.subheader("身份指纹注入")
-    input_text = st.text_area("粘贴 Headers 或 Cookie 字符串", height=350, 
-                              placeholder="cookie2=...; _m_h5_tk=...")
+    st.subheader("1. 身份信息注入")
+    input_text = st.text_area("直接粘贴 Fiddler/Charles 抓到的完整 Header 或 Cookie", height=400, 
+                              placeholder="粘贴在这里，代码会自动提取关键字段...")
 
 with c2:
-    st.subheader("同步设置")
-    target_iid = st.text_input("商品 itemId", value="1033424722209")
-    target_file = st.file_uploader("上传图片", type=['png', 'jpg', 'jpeg'])
+    st.subheader("2. 目标设置")
+    target_iid = st.text_input("待修改商品 itemId", value="1033424722209")
+    target_file = st.file_uploader("选择新主图", type=['png', 'jpg', 'jpeg'])
     
-    if st.button("🚀 启动同步任务", use_container_width=True):
+    if st.button("🚀 执行同步", use_container_width=True):
         if not input_text or not target_file:
-            st.warning("请检查凭证或图片是否缺失")
+            st.warning("请补全凭证或图片")
         else:
             ok, msg = run_sync_process(target_iid, target_file.read(), target_file.name, input_text)
             if ok:
