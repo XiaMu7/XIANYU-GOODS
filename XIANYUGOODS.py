@@ -3,7 +3,6 @@ import hashlib
 import json
 import time
 import re
-import urllib.parse
 import requests
 import urllib3
 
@@ -14,55 +13,53 @@ EDIT_API = "mtop.idle.wx.idleitem.edit"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 增强版解析逻辑 ====================
+# ==================== 核心解析函数 ====================
 
-def update_session_from_raw(session, raw_text):
+def parse_and_inject_cookies(session, cookie_str):
     """
-    针对用户提供的长字符串 Cookie 进行精准解析
+    深度解析用户提供的 Cookie 字符串，并处理 _m_h5_tk
     """
-    # 清理换行符
-    raw_text = raw_text.replace('\n', '').strip()
+    # 移除换行
+    cookie_str = cookie_str.replace('\n', '').strip()
+    # 匹配 key=value
+    kv_pairs = re.findall(r'([^=\s;]+)=([^;]*)', cookie_str)
     
-    # 自动识别多种分隔符 (; 或空格)
-    # 匹配模式: key=value
-    kv_pairs = re.findall(r'([^=\s;]+)=([^;]*)', raw_text)
-    
-    found_count = 0
     for k, v in kv_pairs:
         key = k.strip()
         val = v.strip()
-        if key:
-            # 统一注入到 .goofish.com 域名下
-            session.cookies.set(key, val, domain=".goofish.com")
-            session.cookies.set(key, val, domain="stream-upload.goofish.com")
-            found_count += 1
+        # 注入到所有相关域名，防止域名限制导致的 SYS_ERROR
+        for domain in [".goofish.com", "stream-upload.goofish.com", ".alicdn.com"]:
+            session.cookies.set(key, val, domain=domain)
             
-    return found_count
+    return len(kv_pairs)
 
-def get_safe_tk(session):
-    # 优先从 cookie 字典中找
+def get_clean_tk(session):
+    """获取 _m_h5_tk 并只保留下划线前的 32 位 MD5 部分"""
     for cookie in session.cookies:
         if cookie.name == "_m_h5_tk":
-            return cookie.value
+            return cookie.value.split('_')[0]
     return None
 
-def get_mtop_sign(token, t, app_key, data_str):
-    if not token: return ""
-    tk_prefix = token.split('_')[0]
-    base_str = f"{tk_prefix}&{t}&{app_key}&{data_str}"
+def get_mtop_sign(clean_token, t, app_key, data_str):
+    """标准的阿里 MTOP 签名算法"""
+    base_str = f"{clean_token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(base_str.encode('utf-8')).hexdigest()
 
-# ==================== 业务逻辑 ====================
+# ==================== 业务执行逻辑 ====================
 
-def run_sync_process(item_id, file_bytes, file_name, raw_input):
+def run_sync_process(item_id, file_bytes, raw_input):
     session = requests.Session()
-    count = update_session_from_raw(session, raw_input)
-    st.write(f"📊 已成功解析并注入 {count} 个 Cookie 字段")
+    session.verify = False
     
-    current_tk = get_safe_tk(session)
-    if not current_tk:
-        return False, "❌ 未识别到 _m_h5_tk，请确保输入包含该字段。"
+    # 1. 解析 Cookie
+    count = parse_and_inject_cookies(session, raw_input)
+    st.sidebar.success(f"已识别 {count} 个凭证字段")
+    
+    tk_prefix = get_clean_tk(session)
+    if not tk_prefix:
+        return False, "❌ 未识别到 _m_h5_tk，请重新抓包。"
 
+    # 模拟真实小程序 Header
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50",
         "x-tap": "wx",
@@ -71,37 +68,45 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
     }
 
     try:
-        # --- 步骤 1: 上传图片 ---
+        # --- 步骤 1: 图片上传 ---
+        st.info("正在尝试上传图片...")
         t1 = str(int(time.time() * 1000))
+        
+        # 严谨的参数构造
         biz_data = {"bizCode": "idleItemEdit", "clientType": "pc", "utdid": FIXED_UTDID}
         biz_str = json.dumps(biz_data, separators=(',', ':'))
-        sign1 = get_mtop_sign(current_tk, t1, APP_KEY, biz_str)
+        
+        # 计算签名
+        sign1 = get_mtop_sign(tk_prefix, t1, APP_KEY, biz_str)
         
         up_params = {
             "appkey": "fleamarket", "appKey": APP_KEY, "t": t1, "sign": sign1,
             "api": "mtop.taobao.util.uploadImage", "v": "1.0", "type": "originaljson"
         }
 
-        # 重点：阿里上传接口有时对 files 顺序有要求
+        # 重点：阿里上传接口要求 'data' 字段在 'file' 之前，且必须是 multipart 结构
         files = [
             ('data', (None, biz_str)),
             ('file', ('image.png', file_bytes, 'image/png'))
         ]
         
+        # 发送请求
         res_up = session.post(UPLOAD_URL, params=up_params, files=files, headers=headers, timeout=20)
         
-        # 调试输出
-        st.text_area("上传响应日志", value=res_up.text, height=100)
-        
+        # 调试输出：如果失败，显示原始响应
+        if "success\":true" not in res_up.text.lower():
+            return False, f"CDN上传失败: {res_up.text}"
+            
         up_json = res_up.json()
-        img_url = up_json.get('url') or (up_json.get('object', {}).get('url') if isinstance(up_json.get('object'), dict) else None)
-        
-        if not img_url:
-            return False, f"图片上传失败: {res_up.text[:100]}"
+        img_url = up_json.get('url') or up_json.get('object', {}).get('url')
+        st.success(f"图片上传成功！")
 
-        # --- 步骤 2: 修改商品 ---
-        new_tk = get_safe_tk(session)
-        if new_tk: current_tk = new_tk
+        # --- 步骤 2: 更新商品主图 ---
+        st.info("正在提交修改...")
+        # 重新获取可能翻转的 Token
+        new_tk_full = session.cookies.get("_m_h5_tk")
+        if new_tk_full:
+            tk_prefix = new_tk_full.split('_')[0]
 
         t2 = str(int(time.time() * 1000))
         edit_data = {
@@ -110,31 +115,50 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
             "utdid": FIXED_UTDID, "platform": "ios"
         }
         edit_str = json.dumps(edit_data, ensure_ascii=False, separators=(',', ':'))
-        sign2 = get_mtop_sign(current_tk, t2, APP_KEY, edit_str)
+        sign2 = get_mtop_sign(tk_prefix, t2, APP_KEY, edit_str)
         
+        edit_params = {
+            "jsv": "2.4.12", "appKey": APP_KEY, "t": t2, "sign": sign2, 
+            "v": "1.0", "api": EDIT_API, "type": "originaljson", "accountSite": "xianyu"
+        }
+        
+        # 使用 data 参数发送 x-www-form-urlencoded
         res_edit = session.post(
             f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/",
-            params={"jsv": "2.4.12", "appKey": APP_KEY, "t": t2, "sign": sign2, "v": "1.0", "api": EDIT_API, "type": "originaljson"},
+            params=edit_params,
             data={"data": edit_str},
             headers={**headers, "Content-Type": "application/x-www-form-urlencoded"}
         )
         
         if "SUCCESS" in res_edit.text:
-            return True, "🎊 修改成功！"
+            return True, "🎊 恭喜！同步更新成功。"
         else:
-            return False, f"修改失败: {res_edit.text[:150]}"
+            return False, f"修改失败: {res_edit.text}"
 
     except Exception as e:
-        return False, f"运行错误: {str(e)}"
+        return False, f"发生异常: {str(e)}"
 
-# ==================== UI 保持不变 ====================
-st.title("🐠 闲鱼主图同步助手 (精准解析版)")
-raw_input = st.text_area("直接粘贴那一长串 Cookie", height=150)
-item_id = st.text_input("商品 itemId", "1033424722209")
-img_file = st.file_uploader("选择图片")
+# ==================== Streamlit 界面 ====================
 
-if st.button("🚀 开始同步"):
-    if raw_input and img_file:
-        ok, msg = run_sync_process(item_id, img_file.read(), img_file.name, raw_input)
-        if ok: st.success(msg)
-        else: st.error(msg)
+st.set_page_config(page_title="闲鱼同步助手", layout="centered")
+st.title("🐠 闲鱼主图同步 (稳定版)")
+
+with st.expander("ℹ️ 使用说明", expanded=False):
+    st.write("1. 粘贴抓包获取的完整 Cookie 字符串。")
+    st.write("2. 输入商品 ID。")
+    st.write("3. 上传新图片并执行同步。")
+
+input_text = st.text_area("1. 粘贴 Cookie 字符串", height=180, placeholder="cookie2=...; _m_h5_tk=...;")
+target_iid = st.text_input("2. 商品 itemId", value="1033424722209")
+target_file = st.file_uploader("3. 上传新主图", type=['jpg', 'jpeg', 'png'])
+
+if st.button("🚀 开始执行同步", use_container_width=True):
+    if not input_text or not target_file:
+        st.error("请补全 Cookie 或图片。")
+    else:
+        ok, msg = run_sync_process(target_iid, target_file.read(), input_text)
+        if ok:
+            st.balloons()
+            st.success(msg)
+        else:
+            st.error(msg)
