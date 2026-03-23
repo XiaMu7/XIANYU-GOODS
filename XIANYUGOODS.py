@@ -6,34 +6,37 @@ import re
 import urllib.parse
 import requests
 import urllib3
-import mimetypes
+from PIL import Image
+import io
 
-# 基础设置
+# 1. 基础环境配置
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_KEY = "12574478"
 EDIT_API = "mtop.idle.wx.idleitem.edit"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 核心逻辑：签名与动态令牌 ====================
+# ==================== 核心逻辑模块 ====================
 
 def get_mtop_sign(token: str, t: str, app_key: str, data_str: str) -> str:
-    """计算阿里 MTOP 签名，取 _m_h5_tk 下划线前的部分"""
+    """计算阿里签名：token 只要下划线前的部分"""
     tk_prefix = token.split('_')[0]
     base_str = f"{tk_prefix}&{t}&{app_key}&{data_str}"
     return hashlib.md5(base_str.encode('utf-8')).hexdigest()
 
-def sync_token_from_session(session):
-    """从 Session 的 Cookies 中实时提取最新的 _m_h5_tk"""
-    tk = session.cookies.get("_m_h5_tk", domain=".goofish.com") or \
-         session.cookies.get("_m_h5_tk", domain=".taobao.com") or \
-         session.cookies.get("_m_h5_tk")
-    return tk
+def force_extract_tk(session, raw_text=""):
+    """多渠道暴力提取 _m_h5_tk"""
+    # 优先从 Session Cookies 拿
+    tk = session.cookies.get("_m_h5_tk")
+    if tk: return tk
+    # 其次从原始文本正则匹配
+    match = re.search(r'_m_h5_tk=([^; ]+)', raw_text)
+    if match: return match.group(1).strip()
+    return None
 
-def parse_raw_headers(raw_text):
-    """解析原始 Headers 并提取初始 Cookies"""
+def parse_input_to_session(session, raw_text):
+    """解析 Headers 或纯 Cookie 并注入 Session"""
     headers = {}
-    cookies = {}
     lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
     for line in lines:
         if line.startswith(('POST ', 'GET ', 'HTTP/')): continue
@@ -44,127 +47,118 @@ def parse_raw_headers(raw_text):
                 for item in v.split(';'):
                     if '=' in item:
                         ck, cv = item.strip().split('=', 1)
-                        cookies[ck.strip()] = cv.strip()
+                        session.cookies.set(ck.strip(), cv.strip())
             else:
                 headers[k] = v
-    # 清洗 Header 冲突项
-    forbidden = ['content-length', 'host', 'content-type', 'priority', 'connection']
-    for k in forbidden: headers.pop(k, None)
+        elif '=' in line: # 适配纯 Cookie 字符串
+            for item in line.split(';'):
+                if '=' in item:
+                    ck, cv = item.strip().split('=', 1)
+                    session.cookies.set(ck.strip(), cv.strip())
+    
+    # 注入必备 Header 指纹
     headers.update({"x-tap": "wx", "xweb_xhr": "1"})
-    return headers, cookies
+    # 移除可能引起冲突的头
+    for k in ['content-length', 'host', 'content-type', 'connection', 'priority']:
+        headers.pop(k, None)
+    return headers
 
-# ==================== 业务执行函数 ====================
+# ==================== 业务执行模块 ====================
 
-def run_sync_task(item_id, file_bytes, file_name, raw_headers):
-    # 1. 初始化 Session
+def run_sync_process(item_id, file_bytes, file_name, raw_input):
     session = requests.Session()
     session.verify = False
     
-    # 2. 注入初始凭证
-    headers, init_cookies = parse_raw_headers(raw_headers)
-    for k, v in init_cookies.items():
-        session.cookies.set(k, v)
+    # 注入凭证
+    headers = parse_input_to_session(session, raw_input)
+    current_tk = force_extract_tk(session, raw_input)
     
-    # 获取初始 Token
-    current_tk = sync_token_from_session(session)
     if not current_tk:
-        return False, "❌ Cookie 中找不到 _m_h5_tk，请重新抓包并完整粘贴！"
+        return False, "❌ 未能识别到 _m_h5_tk。请确保粘贴了完整的 Cookie。"
 
     try:
-        # --- [第一步：上传图片] ---
-        st.write("⏳ 正在上传图片...")
+        # --- 步骤 A: 上传图片 ---
+        st.info(f"正在上传图片... (当前Token: {current_tk[:6]}...)")
         t1 = str(int(time.time() * 1000))
         biz_data = json.dumps({"bizCode": "idleItemEdit", "clientType": "pc", "utdid": FIXED_UTDID})
         sign1 = get_mtop_sign(current_tk, t1, APP_KEY, biz_data)
         
-        up_params = {
-            "appkey": "fleamarket", "jsv": "2.4.12", "appKey": APP_KEY, 
-            "t": t1, "sign": sign1, "api": "mtop.taobao.util.uploadImage", 
-            "v": "1.0", "type": "originaljson"
-        }
-        
-        files = [
-            ('data', (None, biz_data)),
-            ('file', (file_name, file_bytes, 'image/png'))
-        ]
+        up_params = {"appkey":"fleamarket","jsv":"2.4.12","appKey":APP_KEY,"t":t1,"sign":sign1,"api":"mtop.taobao.util.uploadImage","v":"1.0","type":"originaljson"}
+        files = [('data',(None, biz_data)), ('file',(file_name, file_bytes, 'image/png'))]
         
         res_up = session.post(UPLOAD_URL, params=up_params, files=files, headers=headers, timeout=20)
         img_match = re.search(r'"url":"(https?://img\.alicdn\.com/[^"]+)"', res_up.text)
         
         if not img_match:
-            return False, f"图片上传阶段失败 (可能 bx-ua 已过期): {res_up.text[:200]}"
+            return False, f"CDN上传失败: {res_up.text[:150]}"
         
-        final_url = img_match.group(1).replace('\\/', '/')
-        st.write(f"✅ 图片上传成功: {final_url}")
+        img_url = img_match.group(1).replace('\\/', '/')
+        st.success(f"图片上传成功")
 
-        # --- [核心：强制同步令牌] ---
-        # 上传后服务器可能通过 set-cookie 给了一个新令牌，必须重新同步
-        new_tk = sync_token_from_session(session)
-        if new_tk:
+        # --- 核心：动态更新 Token ---
+        new_tk = force_extract_tk(session)
+        if new_tk: 
             current_tk = new_tk
-            st.info(f"💡 令牌已动态更新")
+            st.caption("✨ 令牌已自动完成第二阶段同步")
 
-        # --- [第二步：修改商品主图] ---
-        st.write("⏳ 正在同步到商品...")
+        # --- 步骤 B: 修改商品主图 ---
+        st.info("正在更新闲鱼商品信息...")
         t2 = str(int(time.time() * 1000))
-        edit_obj = {
+        edit_data = {
             "itemId": str(item_id),
-            "imageInfoDOList": [{"major": True, "type": 0, "url": final_url, "widthSize": "640", "heightSize": "640"}],
+            "imageInfoDOList": [{"major":True,"type":0,"url":img_url,"widthSize":"640","heightSize":"640"}],
             "utdid": FIXED_UTDID, "platform": "windows"
         }
-        edit_str = json.dumps(edit_obj, ensure_ascii=False)
-        sign2 = get_mtop_sign(current_tk, t2, APP_KEY, edit_str)
+        edit_json = json.dumps(edit_data, ensure_ascii=False)
+        sign2 = get_mtop_sign(current_tk, t2, APP_KEY, edit_json)
         
-        edit_params = {
-            "jsv": "2.4.12", "appKey": APP_KEY, "t": t2, "sign": sign2,
-            "v": "1.0", "api": EDIT_API, "accountSite": "xianyu", "type": "originaljson"
-        }
+        edit_params = {"jsv":"2.4.12","appKey":APP_KEY,"t":t2,"sign":sign2,"v":"1.0","api":EDIT_API,"accountSite":"xianyu","type":"originaljson"}
         
-        edit_headers = headers.copy()
-        edit_headers["content-type"] = "application/x-www-form-urlencoded"
-        payload = f"data={urllib.parse.quote(edit_str)}"
+        # 必须模拟 Form 表单提交
+        headers["content-type"] = "application/x-www-form-urlencoded"
+        payload = f"data={urllib.parse.quote(edit_json)}"
         
-        res_edit = session.post(
-            f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/2.0/", 
-            params=edit_params, data=payload, headers=edit_headers
-        )
+        res_edit = session.post(f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/2.0/", 
+                                params=edit_params, data=payload, headers=headers)
         
-        ret_data = res_edit.json()
-        if "SUCCESS" in str(ret_data.get("ret")):
-            return True, "🎉 商品主图同步成功！"
+        result = res_edit.json()
+        if "SUCCESS" in str(result.get("ret")):
+            return True, "🎊 商品同步成功！主图已更新。"
         else:
-            return False, f"修改失败: {ret_data.get('ret')}"
+            return False, f"同步失败: {result.get('ret')}"
 
     except Exception as e:
-        return False, f"程序运行崩溃: {str(e)}"
+        return False, f"系统错误: {str(e)}"
 
-# ==================== Streamlit UI ====================
+# ==================== Streamlit 界面 ====================
 
-st.set_page_config(page_title="闲鱼主图助手", layout="wide")
-st.title("🐠 闲鱼微信版 - 主图全自动同步器")
+st.set_page_config(page_title="闲鱼主图助手V10", layout="wide")
+st.title("🐠 闲鱼微信主图同步助手")
+
+with st.expander("📖 使用说明"):
+    st.write("1. 在微信闲鱼小程序打开‘编辑宝贝’。")
+    st.write("2. 抓取 `mtop.idle.wx.idleitem.edit` 请求。")
+    st.write("3. 将 **Headers** 或 **Cookie** 粘贴到下方，点击启动。")
 
 c1, c2 = st.columns(2)
 
 with c1:
-    st.subheader("1. 环境指纹注入")
-    raw_h = st.text_area("粘贴 Charles/Fiddler 原始 Headers (含完整 Cookie)", height=450, 
-                         placeholder="包含 bx-ua, mini-janus, _m_h5_tk 等关键指纹...")
-    st.caption("提示：请在微信里‘修改一次商品’，抓取那个 POST 请求的 Headers。")
+    st.subheader("身份指纹注入")
+    input_text = st.text_area("粘贴 Headers 或 Cookie 字符串", height=350, 
+                              placeholder="cookie2=...; _m_h5_tk=...")
 
 with c2:
-    st.subheader("2. 同步任务配置")
-    target_id = st.text_input("目标商品 itemId", value="1033424722209")
-    img_file = st.file_uploader("选择新主图", type=['png', 'jpg', 'jpeg'])
+    st.subheader("同步设置")
+    target_iid = st.text_input("商品 itemId", value="1033424722209")
+    target_file = st.file_uploader("上传图片", type=['png', 'jpg', 'jpeg'])
     
-    if st.button("🚀 启动指纹级同步", use_container_width=True):
-        if not raw_h:
-            st.error("请先粘贴 Headers 内容！")
-        elif not img_file:
-            st.error("请上传图片！")
+    if st.button("🚀 启动同步任务", use_container_width=True):
+        if not input_text or not target_file:
+            st.warning("请检查凭证或图片是否缺失")
         else:
-            success, message = run_sync_task(target_id, img_file.read(), img_file.name, raw_h)
-            if success:
+            ok, msg = run_sync_process(target_iid, target_file.read(), target_file.name, input_text)
+            if ok:
                 st.balloons()
-                st.success(message)
+                st.success(msg)
             else:
-                st.error(message)
+                st.error(msg)
