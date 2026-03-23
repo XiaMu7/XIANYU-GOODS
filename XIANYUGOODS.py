@@ -2,145 +2,143 @@ import streamlit as st
 import json
 import requests
 import time
-import hashlib
 import os
 import re
 import mimetypes
 import urllib.parse
-from urllib3.util.retry import Retry
-from requests.adapters import HTTPAdapter
-
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 微信版专用常量 ---
-APP_KEY = "12574478"
-# 根据你的抓包，这是修改商品的 API
+# --- 最新校准的常量 ---
+# 使用你抓到的流式上传地址
+UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
+# 商品编辑 API（基于你之前的抓包）
 EDIT_API = "mtop.idle.wx.idleitem.edit"
-# 微信版上传图片的可能 API（如果这个报错，我们需要抓一个上传图片的包）
-UPLOAD_API = "mtop.taobao.util.uploadImage" 
-
-def get_mtop_sign(token, t, app_key, data_str):
-    """计算阿里签名"""
-    base_str = f"{token}&{t}&{app_key}&{data_str}"
-    return hashlib.md5(base_str.encode('utf-8')).hexdigest()
+APP_KEY = "12574478"
 
 def init_session():
     s = requests.Session()
     s.verify = False
-    # 模拟微信环境的 User-Agent
+    # 必须模拟微信小程序的 User-Agent 才能通过校验
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 MicroMessenger/7.0.20.1781 NetType/WIFI MiniProgramEnv/Windows",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 MicroMessenger/7.0.20.1781 NetType/WIFI MiniProgramEnv/Windows",
         "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "content-type": "application/x-www-form-urlencoded"
     })
     return s
 
-def upload_logic_wx(session, file_bytes, file_name):
-    """上传逻辑（尝试适配微信网关）"""
-    t = str(int(time.time() * 1000))
-    tk_full = session.cookies.get("_m_h5_tk", "")
-    if not tk_full: return None, "请先在侧边栏更新 Cookie"
-    
-    token = tk_full.split("_")[0]
-    upload_data = {"bizCode": "idleItemEdit", "clientType": "pc"}
-    data_str = json.dumps(upload_data)
-    sign = get_mtop_sign(token, t, APP_KEY, data_str)
-    
-    # 微信版的上传 URL 往往带有 /h5/ 前缀
-    url = f"https://acs.m.goofish.com/gw/{UPLOAD_API}/1.0/"
+def upload_to_fleamarket(session, file_bytes, file_name):
+    """
+    使用你抓到的 fleamarket 专用流式上传接口
+    """
+    # 构造上传参数
     params = {
-        "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
-        "api": UPLOAD_API, "v": "1.0", "type": "originaljson"
+        "floderId": "0",
+        "appkey": "fleamarket",
+        "_input_charset": "utf-8"
     }
     
     mime_type = mimetypes.guess_type(file_name)[0] or 'image/jpeg'
-    files = {'file': (file_name, file_bytes, mime_type)}
-    
+    # 阿里流式接口通常将文件放在 'file' 字段
+    files = {
+        'file': (file_name, file_bytes, mime_type)
+    }
+
     try:
-        # 上传时不要带全局的 content-type，由 requests 自动生成 multipart
-        res = session.post(url, params=params, data={"data": data_str}, files=files, headers={"content-type": None})
-        res_j = res.json()
-        if "SUCCESS" in str(res_j.get("ret")):
-            return res_j["data"]["url"], None
-        return None, f"上传失败: {res_j.get('ret')}"
+        # 注意：这种接口通常不需要额外签名，直接带 Cookie 发送即可
+        res = session.post(UPLOAD_URL, params=params, files=files, timeout=20)
+        
+        # 兼容处理：有的返回是 JSON，有的返回是带 URL 的字符串
+        try:
+            res_j = res.json()
+            if "url" in res_j: return res_j["url"], None
+            if "data" in res_j and "url" in res_j["data"]: return res_j["data"]["url"], None
+            return None, f"接口返回异常: {res.text}"
+        except:
+            # 如果不是 JSON，尝试正则提取 URL
+            match = re.search(r'(https?://img\.alicdn\.com/[^"\s]+)', res.text)
+            if match: return match.group(1), None
+            return None, f"无法解析返回内容: {res.text[:100]}"
+            
     except Exception as e:
-        return None, str(e)
+        return None, f"上传连接失败: {str(e)}"
 
-def edit_item_wx(session, item_id, img_url, template_path):
-    """编辑逻辑：完全匹配你提供的 POST 数据结构"""
-    if not os.path.exists(template_path): return None, "缺少 1.txt"
-    
-    with open(template_path, "r", encoding="utf-8") as f:
-        content = f.read()
-        # 提取 JSON 负载
-        json_match = re.search(r'data=(%7B.*%7D)', content)
-        if json_match:
-            raw_json = urllib.parse.unquote(json_match.group(1))
-            data = json.loads(raw_json)
-        else:
-            # 尝试直接解析全文件 JSON
-            data = json.loads(content[content.find('{'):content.rfind('}')+1])
-
-    # 核心替换：ID 和 图片
-    data["itemId"] = str(item_id)
-    # 匹配抓包中的 imageInfoDOList 结构
-    data["imageInfoDOList"] = [{
-        "major": True, "type": 0, "url": img_url, "widthSize": "640", "heightSize": "640"
-    }]
-    
-    data_str = json.dumps(data, ensure_ascii=False)
+def edit_item_wx(session, item_id, img_url):
+    """
+    执行商品修改
+    """
     t = str(int(time.time() * 1000))
+    # 提取签名用的 Token
     tk = session.cookies.get("_m_h5_tk", "").split("_")[0]
-    sign = get_mtop_sign(tk, t, APP_KEY, data_str)
     
-    # 匹配你抓包中的请求 URL 格式
+    # 构造修改数据（完全匹配你之前的抓包结构）
+    data = {
+        "itemId": str(item_id),
+        "imageInfoDOList": [{"major":True,"type":0,"url":img_url,"widthSize":"640","heightSize":"640"}],
+        "utdid": "v3UyIt1jJFECAXAaAnEns/UL",
+        "platform": "windows"
+    }
+    data_str = json.dumps(data, ensure_ascii=False)
+    
+    # 计算签名
+    base_sign = f"{tk}&{t}&{APP_KEY}&{data_str}"
+    sign = hashlib.md5(base_sign.encode('utf-8')).hexdigest()
+
+    # 微信小程序专用 H5 路径
     url = f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/2.0/"
     params = {
         "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
         "v": "1.0", "type": "originaljson", "api": EDIT_API, "dataType": "json"
     }
     
-    # 微信版必须用 data= 这种 form 格式
-    payload = f"data={urllib.parse.quote(data_str)}"
-    
-    res = session.post(url, params=params, data=payload)
-    return res.json(), None
+    try:
+        # 微信版 Body 必须是 data=...
+        res = session.post(url, params=params, data={"data": data_str})
+        return res.json()
+    except Exception as e:
+        return {"ret": [f"请求异常: {str(e)}"]}
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="微信闲鱼同步器")
-st.title("微信版闲鱼 - 商品主图同步")
+# --- 界面部分 ---
+st.set_page_config(page_title="闲鱼微信版同步器")
+st.title("🐠 闲鱼微信版 - 主图快速同步")
 
 if 'session' not in st.session_state:
     st.session_state.session = init_session()
 
 with st.sidebar:
     st.header("🔑 认证")
-    ck = st.text_area("在此粘贴从微信抓包获取的 Cookie", height=250)
-    if st.button("保存 Cookie"):
+    ck = st.text_area("粘贴微信抓包的完整 Cookie", height=300)
+    if st.button("更新 Cookie"):
         for item in ck.split(';'):
             if '=' in item:
                 k, v = item.strip().split('=', 1)
                 st.session_state.session.cookies.set(k, v)
         st.success("Cookie 已加载")
 
-target_id = st.text_input("宝贝 itemId", placeholder="例如: 1033424722209")
-up_file = st.file_uploader("选择新图片", type=["jpg","png","gif"])
+iid = st.text_input("商品 ID (itemId)", placeholder="从抓包或链接中获取")
+up_file = st.file_uploader("选择新主图 (支持JPG/PNG/GIF)")
 
-if st.button("🚀 执行微信环境同步"):
-    if not target_id or not up_file:
-        st.error("请填写 ID 并上传图片")
+if st.button("🚀 开始同步", use_container_width=True):
+    if not iid or not up_file:
+        st.warning("请填写完整信息")
     else:
-        with st.status("正在模拟微信请求...") as s:
-            url, err = upload_logic_wx(st.session_state.session, up_file.read(), up_file.name)
-            if url:
-                st.write(f"✅ 图片上传成功: {url}")
-                res, e_err = edit_item_wx(st.session_state.session, target_id, url, "1.txt")
-                if res and "SUCCESS" in str(res.get("ret")):
-                    s.update(label="🎉 修改成功！", state="complete")
+        with st.status("正在处理...") as s:
+            # 1. 上传图片
+            s.write("正在通过流式接口上传图片...")
+            img_url, err = upload_to_fleamarket(st.session_state.session, up_file.read(), up_file.name)
+            
+            if img_url:
+                st.write(f"✅ 图片已托管: {img_url}")
+                # 2. 修改商品
+                s.write("正在提交商品修改请求...")
+                res = edit_item_wx(st.session_state.session, iid, img_url)
+                
+                if "SUCCESS" in str(res.get("ret")):
+                    s.update(label="🎉 同步成功！", state="complete")
                     st.balloons()
+                    st.success(f"商品 {iid} 的主图已更新。")
                 else:
-                    st.error(f"修改失败: {res.get('ret') if res else e_err}")
-                    if res: st.json(res)
+                    st.error(f"修改失败: {res.get('ret')}")
+                    st.json(res)
             else:
                 st.error(f"上传环节失败: {err}")
