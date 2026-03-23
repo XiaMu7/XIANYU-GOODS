@@ -15,97 +15,90 @@ import urllib3
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 常量配置（源自 2.txt 和 1.txt） ---
+# --- 常量配置 ---
 APP_KEY = "12574478"
 FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL" 
-# 上传接口改用 2.txt 中的流式专用地址
-STREAM_UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
-# 编辑接口
 EDIT_API = "mtop.idle.wx.idleitem.edit"
 
 def get_mtop_sign(token, t, app_key, data_str):
-    """计算标准阿里签名"""
     base_str = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(base_str.encode('utf-8')).hexdigest()
 
 def init_session():
     s = requests.Session()
     s.verify = False 
-    retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://2.taobao.com/"
+    })
+    retry = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     s.mount('https://', HTTPAdapter(max_retries=retry))
     return s
 
-def upload_logic_v2(session, file_bytes, file_name):
+def upload_logic_final(session, file_bytes, file_name):
     """
-    采用 2.txt 中的 stream-upload 逻辑，绕过 API_NOT_FOUND 错误
+    多模式兼容上传：自动尝试 stream-upload 和 h5api 两种网关
     """
     t = str(int(time.time() * 1000))
-    # 提取最新的 token
-    tk = session.cookies.get("_m_h5_tk", "").split("_")[0]
-    if not tk:
-        return None, "未检测到有效 _m_h5_tk，请更新侧边栏 Cookie"
-
-    # 业务参数
-    upload_params = {
-        "bizCode": "idleItemEdit",
-        "clientType": "pc",
-        "utdid": FIXED_UTDID
-    }
+    tk_full = session.cookies.get("_m_h5_tk", "")
+    if not tk_full:
+        return None, "未检测到有效 Cookie，请在侧边栏重新粘贴"
+    
+    token = tk_full.split("_")[0]
+    upload_params = {"bizCode": "idleItemEdit", "clientType": "pc", "utdid": FIXED_UTDID}
     data_str = json.dumps(upload_params)
-    sign = get_mtop_sign(tk, t, APP_KEY, data_str)
+    sign = get_mtop_sign(token, t, APP_KEY, data_str)
     
-    # 构建请求参数
-    params = {
-        "jsv": "2.7.2",
-        "appKey": APP_KEY,
-        "t": t,
-        "sign": sign,
-        "api": "mtop.taobao.util.uploadImage",
-        "v": "1.0",
-        "type": "originaljson",
-        "dataType": "json"
-    }
+    # 尝试不同的接口地址（模式1：2.txt 模式；模式2：1.txt 模式）
+    endpoints = [
+        ("https://stream-upload.goofish.com/api/upload.api", "stream"),
+        ("https://h5api.m.goofish.com/gw/mtop.taobao.util.uploadImage/1.0/", "h5api")
+    ]
     
-    # 自动识别 MIME 
-    mime_type, _ = mimetypes.guess_type(file_name)
-    mime_type = mime_type or 'image/jpeg'
-    
-    # 随机化文件名
-    safe_name = "".join(random.choices(string.ascii_letters + string.digits, k=16)) + os.path.splitext(file_name)[1]
-    
-    files = {
-        'file': (safe_name, file_bytes, mime_type),
-        'data': (None, data_str) # 2.txt 中 data 是作为 multipart 的一部分发送的
-    }
-    
-    try:
-        # 尝试使用 stream-upload 域名
-        res = session.post(STREAM_UPLOAD_URL, params=params, files=files, timeout=20)
-        res_j = res.json()
+    last_err = ""
+    for url, mode in endpoints:
+        params = {
+            "jsv": "2.7.2", "appKey": APP_KEY, "t": t, "sign": sign,
+            "api": "mtop.taobao.util.uploadImage", "v": "1.0", "type": "originaljson"
+        }
         
-        if "SUCCESS" in str(res_j.get("ret")):
-            return res_j["data"]["url"], None
+        mime_type = mimetypes.guess_type(file_name)[0] or 'image/jpeg'
+        safe_name = "".join(random.choices(string.ascii_letters + string.digits, k=16)) + os.path.splitext(file_name)[1]
+        
+        # 针对不同接口调整表单结构
+        if mode == "stream":
+            files = {'file': (safe_name, file_bytes, mime_type), 'data': (None, data_str)}
         else:
-            return None, f"上传失败: {res_j.get('ret')}"
-    except Exception as e:
-        return None, f"请求异常: {str(e)}"
+            files = {'file': (safe_name, file_bytes, mime_type)}
+            # h5api 模式下 data 往往在 params 或 body 字段里
+        
+        try:
+            res = session.post(url, params=params, files=files, timeout=15)
+            # 关键：检查是否返回了 JSON
+            if res.status_code != 200:
+                last_err = f"服务器返回错误码: {res.status_code}"
+                continue
+            
+            res_j = res.json() # 这里容易报错，如果返回的是 HTML
+            if "SUCCESS" in str(res_j.get("ret")):
+                return res_j["data"]["url"], None
+            else:
+                last_err = str(res_j.get("ret"))
+        except Exception as e:
+            last_err = f"模式 {mode} 请求失败: {str(e)}"
+            continue
+            
+    return None, f"所有上传模式均失败。最后一次错误: {last_err}"
 
 def edit_item_logic(session, item_id, img_url, template_path):
-    """根据 1.txt 模板更新商品"""
     if not os.path.exists(template_path):
-        return None, "找不到模板文件 1.txt"
-
+        return None, "找不到 1.txt"
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
-        # 提取 JSON
-        try:
-            start = content.find('{')
-            end = content.rfind('}')
-            data = json.loads(content[start:end+1])
-        except:
-            return None, "1.txt JSON 解析失败"
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if not match: return None, "模板内未发现JSON"
+        data = json.loads(match.group())
 
-    # 替换 ID 和图片
     data["itemId"] = str(item_id)
     data["images"] = [{"url": img_url, "originalUrl": img_url}]
     
@@ -123,16 +116,17 @@ def edit_item_logic(session, item_id, img_url, template_path):
     res = session.post(url, params=params, data={"data": data_str})
     return res.json(), None
 
-# --- UI 界面 ---
-st.title("🐠 闲鱼商品替换终极版")
+# --- UI ---
+st.set_page_config(page_title="闲鱼同步助手", layout="wide")
+st.title("🚀 闲鱼商品替换工具 (多模式版)")
 
 if 'session' not in st.session_state:
     st.session_state.session = init_session()
 
 with st.sidebar:
-    st.header("🔑 认证")
-    ck = st.text_area("粘贴完整 Cookie", height=200)
-    if st.button("更新并保存"):
+    st.header("🔑 认证配置")
+    ck = st.text_area("在此粘贴最新 Cookie", height=300)
+    if st.button("更新 Cookie"):
         st.session_state.session.cookies.clear()
         for item in ck.split(';'):
             if '=' in item:
@@ -140,37 +134,44 @@ with st.sidebar:
                 st.session_state.session.cookies.set(k, v)
         st.success("Cookie 已加载")
 
-item_id_in = st.text_input("商品 ID")
-file_in = st.file_uploader("选择主图", type=["jpg","png","gif"])
+col1, col2 = st.columns(2)
+with col1:
+    item_id_in = st.text_input("商品 ID")
+with col2:
+    file_in = st.file_uploader("选择主图", type=["jpg","png","gif"])
 
-if st.button("🚀 启动同步", use_container_width=True):
+if st.button("执行同步"):
     if not item_id_in or not file_in:
-        st.warning("请检查 ID 或图片")
+        st.warning("请检查输入")
     else:
-        with st.status("处理中...") as s:
-            url, err = upload_logic_v2(st.session_state.session, file_in.read(), file_in.name)
+        with st.spinner("正在尝试多种模式上传..."):
+            url, err = upload_logic_final(st.session_state.session, file_in.read(), file_in.name)
             if url:
                 st.write("✅ 图片上传成功")
                 res, e_err = edit_item_logic(st.session_state.session, item_id_in, url, "1.txt")
                 if res and "SUCCESS" in str(res.get("ret")):
-                    s.update(label="🎉 同步成功！", state="complete")
+                    st.success("🎉 商品修改成功！")
                     st.balloons()
                 else:
                     st.error(f"编辑失败: {res.get('ret') if res else e_err}")
             else:
-                st.error(f"上传失败: {err}")
+                st.error(err)
 
-# --- 底部错误原因详解 ---
+# --- 报错原因分析 ---
 st.divider()
-with st.expander("❓ 为什么会出现 'FAIL_SYS_API_NOT_FOUNDED'？", expanded=True):
-    st.markdown("""
-    **主要原因有以下几点：**
-    1. **网关不匹配**：闲鱼的图片上传（Upload）和商品编辑（Edit）虽然都属于 MTOP 协议，但它们部署在不同的服务器集群。如果你向 `acs.m.goofish.com`（主要处理商品逻辑）发送一个图片上传指令，它可能找不到对应的处理程序。
-    2. **请求路径错误**：阿里接口的 URL 路径（例如 `/gw/api/v1/...`）必须与参数中的 `api` 字段完全对应。如果路径指向 H5 网关，但 API 参数写成了 PC 端的名称，就会触发此报错。
-    3. **参数位置错误**：在上传文件时，`data` 字段（包含 bizCode 等信息）有时必须作为 `multipart/form-data` 的一个 Part 发送，而不仅仅是 URL 参数。
-    4. **JSV 版本过低**：如果 `jsv` 版本（如 2.4.12）在某些新域名下已停用，也会报找不到 API。
-    
-    **本次修复方案：**
-    * 强制将图片上传地址切换至 `stream-upload.goofish.com`（专为图片设计的流式网关）。
-    * 将 `data` 参数同时放入 `multipart` 表单中，确保网关能正确解析。
-    """)
+st.subheader("❌ 报错详解：Expecting value: line 2 column 1")
+st.markdown("""
+**原因一：接口被拦截（最常见）**
+当你频繁上传或 Cookie 异常时，服务器会返回一个 **HTML 验证码页面** 或 **WAF 拦截页面**。脚本预期收到 JSON（类似 `{"ret":...}`），但实际收到了 `<!DOCTYPE html>...`。因为 HTML 的第二行通常是空的或不是 `{` 开头，所以 Python 报错“解析 JSON 失败”。
+
+**原因二：域名无法解析**
+`stream-upload.goofish.com` 是闲鱼内部域名，有时在某些网络环境下（如公司内网、特定梯子）无法访问，导致返回了运营商的错误导航页。
+
+**原因三：MIME 类型不匹配**
+如果上传 GIF 但没有正确设置 `image/gif`，部分网关会直接断开连接或报错，导致返回内容为空。
+
+**本次修复改进：**
+* **加入了 `res.status_code` 检查**：只有当服务器返回 200 时才尝试解析 JSON，避免直接崩溃。
+* **增加了 H5API 备用网关**：如果 `stream-upload` 报错，会自动切换到 `h5api.m.goofish.com`。
+* **强化了 Header**：模拟了真实的浏览器 Referer 和 UA。
+""")
