@@ -8,156 +8,175 @@ import re
 import urllib.parse
 import urllib3
 
-# 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 核心常量 (严格对齐你的 2.txt 和抓包) ---
-UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
-EDIT_API = "mtop.idle.wx.idleitem.edit"
+# --- 核心配置 ---
 APP_KEY = "12574478"
-FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
+EDIT_API = "mtop.idle.wx.idleitem.edit"
+UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
 
 def get_mtop_sign(token, t, app_key, data_str):
     base_str = f"{token}&{t}&{app_key}&{data_str}"
     return hashlib.md5(base_str.encode('utf-8')).hexdigest()
 
-def upload_to_wechat(session, file_bytes, file_name):
+def parse_raw_headers(raw_text):
     """
-    完全模拟微信小程序上传：严格字段顺序 + XWeb Header
+    全自动解析器：从原始抓包文本中提取 Headers 和 Cookies
+    """
+    headers = {}
+    cookies = {}
+    
+    # 提取所有 Header 键值对
+    lines = raw_text.strip().split('\n')
+    for line in lines:
+        if ':' in line:
+            key, value = line.split(':', 1)
+            key = key.strip().lower()
+            value = value.strip()
+            
+            # 特殊处理 Cookie 字段
+            if key == 'cookie':
+                for cookie_item in value.split(';'):
+                    if '=' in cookie_item:
+                        ck, cv = cookie_item.strip().split('=', 1)
+                        cookies[ck] = cv
+            else:
+                headers[key] = value
+
+    # 如果存在 x-smallstc，从中补全缺失的 Cookie 字段
+    if 'x-smallstc' in headers:
+        try:
+            stc_json = json.loads(headers['x-smallstc'])
+            for k, v in stc_json.items():
+                if isinstance(v, str) or isinstance(v, int):
+                    cookies[k] = str(v)
+        except:
+            pass
+
+    return headers, cookies
+
+def upload_image_wx(session, file_bytes, file_name, extra_headers):
+    """
+    带指纹的图片上传
     """
     t = str(int(time.time() * 1000))
+    # 获取签名用的 token
     tk_full = session.cookies.get("_m_h5_tk", "")
-    if not tk_full: return None, "未检测到Cookie，请在侧边栏粘贴"
-    token = tk_full.split("_")[0]
+    token = tk_full.split("_")[0] if tk_full else ""
 
-    # 1. URL 参数
+    upload_biz = {"bizCode": "idleItemEdit", "clientType": "pc", "utdid": "v3UyIt1jJFECAXAaAnEns/UL"}
+    data_str = json.dumps(upload_biz)
+    sign = get_mtop_sign(token, t, APP_KEY, data_str)
+
     params = {
-        "floderId": "0",
-        "appkey": "fleamarket",
-        "_input_charset": "utf-8",
-        "jsv": "2.4.12",
-        "appKey": APP_KEY,
-        "t": t,
-        "api": "mtop.taobao.util.uploadImage",
-        "v": "1.0",
-        "type": "originaljson"
+        "floderId": "0", "appkey": "fleamarket", "_input_charset": "utf-8",
+        "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
+        "api": "mtop.taobao.util.uploadImage", "v": "1.0", "type": "originaljson"
     }
     
-    # 2. 计算签名 (针对上传业务)
-    upload_biz = {"bizCode": "idleItemEdit", "clientType": "pc", "utdid": FIXED_UTDID}
-    data_str = json.dumps(upload_biz)
-    params["sign"] = get_mtop_sign(token, t, APP_KEY, data_str)
-
-    # 3. 构造 Multipart 字段 (注意：顺序必须是 content-type -> bizCode -> name -> file)
-    mime_type = mimetypes.guess_type(file_name)[0] or 'image/png'
     fields = [
         ('content-type', (None, 'multipart/form-data')),
         ('bizCode', (None, 'fleamarket')),
         ('name', (None, 'fileFromAlbum')),
-        ('data', (None, data_str)), # 2.txt 里的逻辑要求这个
-        ('file', (file_name, file_bytes, mime_type))
+        ('data', (None, data_str)),
+        ('file', (file_name, file_bytes, mimetypes.guess_type(file_name)[0] or 'image/png'))
     ]
 
-    # 4. 模拟微信 XWeb 特有请求头
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows",
-        "xweb_xhr": "1",
-        "Referer": "https://servicewechat.com/wx9882f2a891880616/75/page-frame.html",
-        "Accept": "*/*"
-    }
+    # 合并指纹 Header，但移除 Content-Type 让 requests 自动生成
+    headers = extra_headers.copy()
+    headers.pop('content-type', None)
+    headers.pop('content-length', None)
 
     try:
-        # 发送请求时强行清空 session 中可能存在的干扰 content-type
         res = session.post(UPLOAD_URL, params=params, files=fields, headers=headers, timeout=20)
-        
-        if res.status_code == 200:
-            # 兼容处理：正则提取 URL，防止 JSON 解析失败
-            match = re.search(r'"url":"(https?://img\.alicdn\.com/[^"]+)"', res.text)
-            if match:
-                return match.group(1).replace('\\/', '/'), None
-            
-            res_j = res.json()
-            if "url" in res_j: return res_j["url"], None
-            if "data" in res_j and "url" in res_j["data"]: return res_j["data"]["url"], None
-            return None, f"上传失败，返回内容: {res.text}"
-        else:
-            return None, f"HTTP状态码错误: {res.status_code}"
+        match = re.search(r'"url":"(https?://img\.alicdn\.com/[^"]+)"', res.text)
+        if match:
+            return match.group(1).replace('\\/', '/'), None
+        return None, f"上传异常: {res.text[:100]}"
     except Exception as e:
-        return None, f"网络异常: {str(e)}"
+        return None, str(e)
 
-def edit_item_wx(session, item_id, img_url):
+def edit_item_wx(session, item_id, img_url, extra_headers):
     """
-    微信小程序版商品修改逻辑
+    带指纹的商品修改
     """
     t = str(int(time.time() * 1000))
-    tk = session.cookies.get("_m_h5_tk", "").split("_")[0]
+    tk = session.cookies.get("_m_h5_tk", "").split("_")[0] if session.cookies.get("_m_h5_tk") else ""
     
-    # 构造微信要求的 Body
     edit_data = {
         "itemId": str(item_id),
         "imageInfoDOList": [{"major":True,"type":0,"url":img_url,"widthSize":"640","heightSize":"640"}],
-        "utdid": FIXED_UTDID,
+        "utdid": "v3UyIt1jJFECAXAaAnEns/UL",
         "platform": "windows"
     }
     data_str = json.dumps(edit_data, ensure_ascii=False)
     sign = get_mtop_sign(tk, t, APP_KEY, data_str)
 
-    # 使用你抓包确认的微信专用 H5 路径
-    url = f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/2.0/"
     params = {
         "jsv": "2.4.12", "appKey": APP_KEY, "t": t, "sign": sign,
-        "v": "1.0", "type": "originaljson", "api": EDIT_API, "dataType": "json"
+        "v": "1.0", "type": "originaljson", "api": EDIT_API,
+        "accountSite": "xianyu", "dataType": "json"
     }
     
-    # 微信小程序通常在 body 中传 data=...
-    res = session.post(url, params=params, data={"data": data_str})
-    return res.json()
+    url = f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/2.0/"
+    
+    # 注入抓包中的核心指纹
+    headers = extra_headers.copy()
+    headers.update({
+        "content-type": "application/x-www-form-urlencoded",
+        "x-tap": "wx"
+    })
+    
+    payload = f"data={urllib.parse.quote(data_str)}"
+    
+    try:
+        res = session.post(url, params=params, data=payload, headers=headers)
+        return res.json()
+    except Exception as e:
+        return {"ret": [str(e)]}
 
-# --- Streamlit 界面 ---
-st.set_page_config(page_title="微信闲鱼主图同步", layout="centered")
-st.title("🐠 闲鱼微信版 - 主图同步工具")
+# --- UI ---
+st.set_page_config(page_title="全自动指纹版同步器", layout="wide")
+st.title("🛡️ 闲鱼微信版 - 指纹同步同步器")
 
 if 'session' not in st.session_state:
     st.session_state.session = requests.Session()
     st.session_state.session.verify = False
+if 'saved_headers' not in st.session_state:
+    st.session_state.saved_headers = {}
 
-with st.sidebar:
-    st.header("🔑 认证配置")
-    raw_ck = st.text_area("在此粘贴从微信抓到的完整 Cookie", height=300)
-    if st.button("更新 Cookie"):
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("1. 粘贴原始抓包数据")
+    raw_input = st.text_area("直接把 Charles/Fiddler 的 Header 区域全部粘贴在这里", height=400, placeholder="host: acs.m.goofish.com\nuser-agent: ...\nbx-ua: ...")
+    if st.button("✨ 解析并保存指纹"):
+        h, c = parse_raw_headers(raw_input)
+        st.session_state.saved_headers = h
         st.session_state.session.cookies.clear()
-        for item in raw_ck.split(';'):
-            if '=' in item:
-                k, v = item.strip().split('=', 1)
-                st.session_state.session.cookies.set(k, v)
-        st.success("Cookie 已加载！")
+        for k, v in c.items():
+            st.session_state.session.cookies.set(k, v)
+        st.success(f"解析成功！已提取 {len(h)} 个 Header 和 {len(c)} 个 Cookie 字段。")
 
-st.info("提示：此版本专门针对微信小程序环境，请确保使用小程序中的 Cookie。")
-
-iid = st.text_input("待修改商品 ID", placeholder="例如: 1033424722209")
-up_file = st.file_uploader("选择电脑上的新图 (JPG/PNG)")
-
-if st.button("🚀 开始同步更新", use_container_width=True):
-    if not iid or not up_file:
-        st.warning("请完整填写 ID 并选择图片")
-    else:
-        with st.status("正在执行同步...") as status:
-            # 1. 执行微信版上传
-            status.write("正在通过流式网关上传图片...")
-            img_url, err = upload_to_wechat(st.session_state.session, up_file.read(), up_file.name)
-            
-            if img_url:
-                status.write(f"✅ 图片上传成功")
-                # 2. 执行商品编辑
-                status.write("正在提交修改到闲鱼服务器...")
-                res = edit_item_wx(st.session_state.session, iid, img_url)
-                
-                if "SUCCESS" in str(res.get("ret")):
-                    status.update(label="🎉 同步成功！", state="complete")
-                    st.balloons()
-                    st.success(f"商品 {iid} 的主图已更新为：\n{img_url}")
+with col2:
+    st.subheader("2. 执行同步")
+    iid = st.text_input("商品 ID", value="1033424722209")
+    up_file = st.file_uploader("选择新主图")
+    
+    if st.button("🚀 开始指纹同步", use_container_width=True):
+        if not st.session_state.saved_headers:
+            st.error("请先在左侧粘贴并解析 Header！")
+        elif iid and up_file:
+            with st.spinner("同步中..."):
+                img_url, err = upload_image_wx(st.session_state.session, up_file.read(), up_file.name, st.session_state.saved_headers)
+                if img_url:
+                    st.write("📸 图片上传成功")
+                    res = edit_item_wx(st.session_state.session, iid, img_url, st.session_state.saved_headers)
+                    if "SUCCESS" in str(res.get("ret")):
+                        st.balloons()
+                        st.success("🎉 商品主图已更新成功！")
+                    else:
+                        st.error(f"修改失败: {res.get('ret')}")
+                        st.json(res)
                 else:
-                    st.error(f"修改失败: {res.get('ret')}")
-                    st.json(res)
-            else:
-                st.error(f"上传失败原因: {err}")
+                    st.error(f"上传环节失败: {err}")
