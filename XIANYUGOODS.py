@@ -7,39 +7,38 @@ import requests
 import urllib3
 from urllib.parse import quote
 
-# 基础配置
+# 基础环境配置
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_KEY = "12574478"
 EDIT_API = "mtop.idle.wx.idleitem.edit"
 PC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 def get_tk_logic(cookie_str):
-    """从 Cookie 字符串中自动解析出需要的 Token 信息"""
+    """从 Cookie 中提取 _m_h5_tk 的前缀作为签名密钥"""
     tk_match = re.search(r'_m_h5_tk=([a-f0-9]+)_(\d+)', cookie_str)
-    enc_match = re.search(r'_m_h5_tk_enc=([a-f0-9]+)', cookie_str)
-    
     if tk_match:
         full_tk = f"{tk_match.group(1)}_{tk_match.group(2)}"
         clean_tk = tk_match.group(1)
-        tk_enc = enc_match.group(1) if enc_match else ""
-        return full_tk, clean_tk, tk_enc
-    return None, None, None
+        return full_tk, clean_tk
+    return None, None
 
 def run_sync_process(item_id, file_bytes, cookie_str):
     session = requests.Session()
     
-    # 1. 自动解析 Token
-    full_tk, clean_tk, tk_enc = get_tk_logic(cookie_str)
+    # 1. 解析 Token
+    full_tk, clean_tk = get_tk_logic(cookie_str)
     if not clean_tk:
-        return False, "❌ 无法从 Cookie 中提取到 _m_h5_tk，请检查粘贴内容是否完整。"
+        return False, "❌ Cookie 格式错误：未找到 _m_h5_tk。请确保从浏览器 Network 标签完整复制。"
 
-    # 2. 注入所有 Cookie 到 Session
+    # 2. 注入 Cookie 域
     kv_pairs = re.findall(r'([^=\s;]+)=([^;]*)', cookie_str)
     for k, v in kv_pairs:
-        session.cookies.set(k.strip(), v.strip(), domain=".goofish.com")
-        session.cookies.set(k.strip(), v.strip(), domain=".taobao.com")
+        key, val = k.strip(), v.strip()
+        session.cookies.set(key, val, domain=".goofish.com")
+        session.cookies.set(key, val, domain=".taobao.com")
 
-    headers = {
+    # 公共请求头
+    base_headers = {
         "User-Agent": PC_UA,
         "Origin": "https://2.taobao.com",
         "Referer": "https://2.taobao.com/",
@@ -47,10 +46,11 @@ def run_sync_process(item_id, file_bytes, cookie_str):
     }
 
     try:
-        # --- 步骤 A: 上传图片 ---
-        st.write("🔄 正在上传二进制流至 stream-upload...")
+        # --- 步骤 A: 上传图片 (增加 bizCode) ---
+        st.write("📤 正在上传图片流...")
         up_params = {
             "appkey": "fleamarket",
+            "bizCode": "fleamarket",  # 显式指定业务码
             "_input_charset": "utf-8",
             "floderId": "0"
         }
@@ -59,7 +59,7 @@ def run_sync_process(item_id, file_bytes, cookie_str):
         res_up = session.post(
             "https://stream-upload.goofish.com/api/upload.api",
             params=up_params,
-            headers=headers,
+            headers=base_headers,
             files=files,
             timeout=30
         )
@@ -68,28 +68,41 @@ def run_sync_process(item_id, file_bytes, cookie_str):
         img_url = up_data.get('url') or up_data.get('object', {}).get('url')
         
         if not img_url:
-            return False, f"图片上传失败，响应：{res_up.text}"
+            return False, f"图片上传失败，服务器返回：{res_up.text}"
         
-        st.write(f"✅ 图片上传成功：{img_url[:50]}...")
+        st.write(f"✅ 图片上传成功，地址：`{img_url[:40]}...`")
 
-        # --- 步骤 B: 提交业务修改 ---
-        st.write("🔄 正在构造签名并更新商品主图...")
+        # --- 步骤 B: 修改商品 (核心修复版) ---
+        st.write("🚀 正在提交业务修改请求...")
         t = str(int(time.time() * 1000))
         
-        # 业务数据：确保格式与 Web 端一致
+        # 修复点 1：itemId 必须尝试转换为数字类型，避免后端 Long 解析异常
+        try:
+            final_item_id = int(item_id)
+        except ValueError:
+            final_item_id = str(item_id)
+
+        # 修复点 2：构造标准业务 JSON (补充长宽和排序)
         edit_data = {
-            "itemId": str(item_id),
-            "imageInfoDOList": [{"major": True, "url": img_url, "type": 0, "widthSize": 1024, "heightSize": 1024}],
+            "itemId": final_item_id,
+            "imageInfoDOList": [{
+                "major": True, 
+                "url": img_url, 
+                "type": 0, 
+                "widthSize": 1024, 
+                "heightSize": 1024
+            }],
             "platform": "pc"
         }
-        # 强制使用无空格的 JSON 字符串进行签名
-        data_str = json.dumps(edit_data, separators=(',', ':'))
         
-        # 计算 MD5 签名
-        sign_payload = f"{clean_tk}&{t}&{APP_KEY}&{data_str}"
-        sign = hashlib.md5(sign_payload.encode('utf-8')).hexdigest()
+        # 修复点 3：确保签名字符串和 Data 字符串完全一致 (无空格，Key 排序)
+        data_str = json.dumps(edit_data, separators=(',', ':'), sort_keys=True)
+        
+        # 计算签名: token&t&appKey&data
+        sign_origin = f"{clean_tk}&{t}&{APP_KEY}&{data_str}"
+        sign = hashlib.md5(sign_origin.encode('utf-8')).hexdigest()
 
-        params = {
+        mtop_params = {
             "jsv": "2.6.1",
             "appKey": APP_KEY,
             "t": t,
@@ -103,47 +116,47 @@ def run_sync_process(item_id, file_bytes, cookie_str):
         # 发送业务请求
         res_edit = session.post(
             f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/",
-            params=params,
+            params=mtop_params,
             data={"data": data_str},
-            headers={"Content-Type": "application/x-www-form-urlencoded", **headers}
+            headers={"Content-Type": "application/x-www-form-urlencoded", **base_headers}
         )
 
-        result = res_edit.json()
-        ret_msg = result.get("ret", ["未知错误"])[0]
+        resp_json = res_edit.json()
+        ret_list = resp_json.get("ret", ["未知错误"])
+        
+        if "SUCCESS" in ret_list[0]:
+            return True, "🎊 恭喜！闲鱼主图已成功同步更新。"
+        else:
+            return False, f"业务同步失败：{ret_list[0]}\n提示：{resp_json.get('data', {}).get('errorMsg', '服务器未给出具体原因')}"
 
-        if "SUCCESS" in ret_msg:
-            return True, "🎊 闲鱼主图更新成功！"
     except Exception as e:
-        return False, f"发生异常: {str(e)}"
+        return False, f"程序执行异常：{str(e)}"
 
-    return False, f"业务同步失败: {ret_msg}"
+# --- Streamlit 界面 ---
+st.set_page_config(page_title="闲鱼同步助手-修复版", page_icon="🐟")
+st.title("🐟 闲鱼主图同步 (稳定版)")
 
-# --- UI 界面 ---
-st.set_page_config(page_title="闲鱼自动同步工具", layout="centered")
-st.title("🐟 闲鱼主图快速同步 (PC版)")
+st.info("💡 提示：如果依然报错 'UNKNOWN_THROWABLE'，请检查该商品是否为【下架】状态，或者该 itemId 是否属于当前 Cookie 登录的账号。")
 
-with st.expander("📌 使用说明 (必读)", expanded=True):
-    st.markdown("""
-    1. 登录电脑版闲鱼/淘宝。
-    2. 按 F12 打开开发者工具，刷新页面，在 **Network** 找到任意 `mtop` 请求。
-    3. 复制 **Request Headers** 里的整个 `Cookie` 字符串。
-    4. 粘贴到下方，上传图片后点击执行。
-    """)
+with st.container():
+    col1, col2 = st.columns(2)
+    with col1:
+        item_id_input = st.text_input("📦 商品 itemId", placeholder="1033424722209")
+    with col2:
+        img_file = st.file_uploader("🖼️ 上传主图", type=['jpg', 'jpeg', 'png'])
 
-item_id = st.text_input("📦 商品 itemId", placeholder="例如：1033424722209")
-raw_cookie = st.text_area("🔑 粘贴完整 Cookie", height=150, placeholder="st=success; _m_h5_tk=xxxx; ...")
-uploaded_file = st.file_uploader("🖼️ 选择新主图", type=['jpg', 'jpeg', 'png'])
+    cookie_input = st.text_area("🔑 粘贴 Cookie 全文", height=150, placeholder="st=success; _m_h5_tk=...; _m_h5_tk_enc=...")
 
-if st.button("🚀 开始同步"):
-    if not item_id or not raw_cookie or not uploaded_file:
-        st.error("请完整填写 itemId、Cookie 并上传图片！")
+if st.button("🚀 执行同步任务"):
+    if not item_id_input or not cookie_input or not img_file:
+        st.error("请完整填写所有信息！")
     else:
-        with st.status("执行中...", expanded=True) as status:
-            success, message = run_sync_process(item_id, uploaded_file.read(), raw_cookie)
+        with st.status("正在处理...", expanded=True) as status:
+            success, msg = run_sync_process(item_id_input, img_file.read(), cookie_input)
             if success:
-                status.update(label="处理完成！", state="complete")
+                status.update(label="处理成功！", state="complete")
                 st.balloons()
-                st.success(message)
+                st.success(msg)
             else:
-                status.update(label="处理失败", state="error")
-                st.error(message)
+                status.update(label="执行失败", state="error")
+                st.error(msg)
