@@ -6,124 +6,104 @@ import re
 import urllib.parse
 import requests
 import urllib3
+import random
 
-# 1. 基础环境配置
+# 环境配置
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 APP_KEY = "12574478"
 EDIT_API = "mtop.idle.wx.idleitem.edit"
 UPLOAD_URL = "https://stream-upload.goofish.com/api/upload.api"
-FIXED_UTDID = "v3UyIt1jJFECAXAaAnEns/UL"
 
-# ==================== 核心逻辑模块 ====================
+# ==================== 核心逻辑 ====================
 
 def get_safe_tk(session):
-    """安全获取 _m_h5_tk，解决 CookieConflictError"""
     for cookie in session.cookies:
         if cookie.name == "_m_h5_tk":
             return cookie.value
     return None
 
-def get_mtop_sign(token: str, t: str, app_key: str, data_str: str) -> str:
-    """阿里签名算法"""
+def get_mtop_sign(token, t, app_key, data_str):
     if not token: return ""
     tk_prefix = token.split('_')[0]
     base_str = f"{tk_prefix}&{t}&{app_key}&{data_str}"
     return hashlib.md5(base_str.encode('utf-8')).hexdigest()
 
-def update_session_from_raw(session, raw_text):
-    """深度解析凭证"""
+def inject_credentials(session, raw_text):
+    """全量注入，不放过任何一个 Cookie"""
     # 提取 x-smallstc
     stc_match = re.search(r'x-smallstc:\s*({.+})', raw_text)
     if stc_match:
         try:
-            stc_json = json.loads(stc_match.group(1))
-            for key in ['cookie2', 'sgcookie', 'sid', 'unb']:
-                if key in stc_json:
-                    session.cookies.set(key, str(stc_json[key]), domain=".goofish.com")
+            stc_data = json.loads(stc_match.group(1))
+            for k, v in stc_data.items():
+                session.cookies.set(str(k), str(v), domain=".goofish.com")
         except: pass
 
-    # 提取所有 k=v 格式 Cookie
-    kv_pairs = re.findall(r'(?:^|;|,|(?<=\s))([^=;\s]+)=([^;\s,]+)', raw_text)
-    for k, v in kv_pairs:
-        if k.strip().lower() not in ['host', 'content-length', 'content-type']:
-            session.cookies.set(k.strip(), v.strip(), domain=".goofish.com")
+    # 提取所有 k=v
+    pairs = re.findall(r'(?:^|;|,|(?<=\s))([^=;\s]+)=([^;\s,]+)', raw_text)
+    for k, v in pairs:
+        k_s = k.strip()
+        if k_s.lower() not in ['host', 'content-length', 'content-type', 'connection']:
+            session.cookies.set(k_s, v.strip(), domain=".goofish.com")
 
 def run_sync_process(item_id, file_bytes, file_name, raw_input):
     session = requests.Session()
-    session.verify = False
-    update_session_from_raw(session, raw_input)
-    current_tk = get_safe_tk(session)
+    inject_credentials(session, raw_input)
     
+    current_tk = get_safe_tk(session)
     if not current_tk:
-        return False, "❌ 未发现 _m_h5_tk。请检查抓包内容。"
+        return False, "❌ 未识别到 _m_h5_tk，请重新抓包并确保包含 Cookie。"
 
-    # 模拟更真实的微信小程序 Headers
-    common_headers = {
-        "x-tap": "wx",
-        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50",
-        "referer": "https://servicewechat.com/wx9882f2a891880616/74/page-frame.html"
-    }
+    # 模拟真实微信环境
+    ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x1800323c) NetType/WIFI Language/zh_CN"
+    headers = {"User-Agent": ua, "x-tap": "wx", "xweb_xhr": "1"}
 
     try:
-        # --- 步骤 1: 上传图片 (关键修复点) ---
-        st.info("正在上传图片...")
+        # --- 1. 图片上传 ---
         t1 = str(int(time.time() * 1000))
-        
-        # 闲鱼小程序标准的 bizData 结构
-        biz_data_dict = {
-            "bizCode": "idleItemEdit",
-            "clientType": "pc",
-            "utdid": FIXED_UTDID
-        }
-        biz_data_str = json.dumps(biz_data_dict, separators=(',', ':'))
-        sign1 = get_mtop_sign(current_tk, t1, APP_KEY, biz_data_str)
+        biz_data = json.dumps({"bizCode": "idleItemEdit", "clientType": "pc", "utdid": "v3UyIt1jJFECAXAaAnEns/UL"}, separators=(',', ':'))
+        sign1 = get_mtop_sign(current_tk, t1, APP_KEY, biz_data)
         
         up_params = {
-            "appkey": "fleamarket",
-            "appKey": APP_KEY,
-            "t": t1,
-            "sign": sign1,
-            "api": "mtop.taobao.util.uploadImage",
-            "v": "1.0",
-            "type": "originaljson"
+            "appkey": "fleamarket", "appKey": APP_KEY, "t": t1, "sign": sign1,
+            "api": "mtop.taobao.util.uploadImage", "v": "1.0", "type": "originaljson"
         }
         
-        # 修复：multipart 表单中，'data' 字段通常直接传字符串，而不是 (None, str)
-        # 且文件名如果是中文建议统一为 image.png
+        # 严格构造 Files 结构
         files = {
-            'data': (None, biz_data_str),
+            'data': (None, biz_data),
             'file': ('image.png', file_bytes, 'image/png')
         }
         
-        res_up = session.post(UPLOAD_URL, params=up_params, files=files, headers=common_headers, timeout=20)
+        res_up = session.post(UPLOAD_URL, params=up_params, files=files, headers=headers, timeout=20)
         
-        # 检查是否因为 Token 刷新导致失败
-        if "FAIL_SYS_TOKEN_EXPIRED" in res_up.text:
-            return False, "❌ Token 已过期，请重新抓包。"
-            
-        up_res_json = res_up.json()
-        img_url = up_res_json.get('url') or up_res_json.get('object', {}).get('url')
-        
-        if not img_url:
-            return False, f"上传失败 (SYS_ERROR): 请尝试更换一张图片或重新抓包。"
+        if res_up.status_code != 200:
+            return False, f"上传接口响应异常: {res_up.status_code}"
 
-        # 更新可能翻转的 Token
+        # 尝试解析 URL
+        try:
+            up_json = res_up.json()
+            img_url = up_json.get('url') or (up_json.get('object', {}) if isinstance(up_json.get('object'), str) else up_json.get('object', {}).get('url'))
+        except:
+            img_url = re.search(r'"url":"(https?://[^"]+)"', res_up.text)
+            img_url = img_url.group(1).replace("\\/", "/") if img_url else None
+
+        if not img_url:
+            return False, f"CDN返回错误: {res_up.text}"
+
+        # --- 2. 提交修改 ---
+        # 更新 Token (如果阿里刷新了它)
         new_tk = get_safe_tk(session)
         if new_tk: current_tk = new_tk
 
-        # --- 步骤 2: 修改主图 ---
-        st.info("正在修改主图...")
         t2 = str(int(time.time() * 1000))
-        
         edit_data = {
             "itemId": str(item_id),
-            "imageInfoDOList": [{
-                "major": True, "url": img_url, "type": 0, "widthSize": "800", "heightSize": "800"
-            }],
-            "utdid": FIXED_UTDID, "platform": "ios"
+            "imageInfoDOList": [{"major": True, "url": img_url, "type": 0, "widthSize": "800", "heightSize": "800"}],
+            "utdid": "v3UyIt1jJFECAXAaAnEns/UL", "platform": "ios"
         }
-        edit_json_str = json.dumps(edit_data, separators=(',', ':'))
-        sign2 = get_mtop_sign(current_tk, t2, APP_KEY, edit_json_str)
+        edit_str = json.dumps(edit_data, ensure_ascii=False, separators=(',', ':'))
+        sign2 = get_mtop_sign(current_tk, t2, APP_KEY, edit_str)
         
         edit_params = {
             "jsv": "2.4.12", "appKey": APP_KEY, "t": t2, "sign": sign2, "v": "1.0",
@@ -133,30 +113,37 @@ def run_sync_process(item_id, file_bytes, file_name, raw_input):
         res_edit = session.post(
             f"https://acs.m.goofish.com/h5/{EDIT_API}/1.0/",
             params=edit_params,
-            data={"data": edit_json_str}, # 自动 urlencode
-            headers={**common_headers, "content-type": "application/x-www-form-urlencoded"}
+            data={"data": edit_str},
+            headers={**headers, "Content-Type": "application/x-www-form-urlencoded"}
         )
         
         if "SUCCESS" in res_edit.text:
-            return True, "🎊 替换成功！"
+            return True, "🎊 恭喜！同步更新成功！"
         else:
-            return False, f"修改失败：{res_edit.json().get('ret')}"
+            return False, f"修改失败: {res_edit.text}"
 
     except Exception as e:
-        return False, f"运行错误: {str(e)}"
+        return False, f"运行故障: {str(e)}"
 
 # ==================== Streamlit UI ====================
 
-st.set_page_config(page_title="闲鱼助手")
-st.title("🐠 闲鱼主图同步 (修复 SYS_ERROR)")
+st.set_page_config(page_title="闲鱼主图神器", page_icon="🐠")
+st.title("🐠 闲鱼主图同步助手")
 
-input_raw = st.text_area("1. 粘贴抓包原始数据", height=150)
-item_id = st.text_input("2. 商品 itemId", value="1033424722209")
-img_file = st.file_uploader("3. 选择新主图", type=['jpg', 'jpeg', 'png'])
+raw_input = st.text_area("1. 粘贴完整抓包信息", height=200, placeholder="此处粘贴包含 Cookie 的 Header...")
+item_id = st.text_input("2. 商品 itemId", "1033424722209")
+uploaded_file = st.file_uploader("3. 上传新图片", type=['png', 'jpg', 'jpeg'])
 
-if st.button("🚀 执行同步", use_container_width=True):
-    if input_raw and item_id and img_file:
-        ok, msg = run_sync_process(item_id, img_file.read(), img_file.name, input_raw)
-        st.success(msg) if ok else st.error(msg)
+if st.button("🚀 开始执行同步", use_container_width=True):
+    if raw_input and item_id and uploaded_file:
+        with st.status("正在全力同步中...", expanded=True) as status:
+            ok, msg = run_sync_process(item_id, uploaded_file.read(), uploaded_file.name, raw_input)
+            if ok:
+                status.update(label="同步成功！", state="complete")
+                st.balloons()
+                st.success(msg)
+            else:
+                status.update(label="任务失败", state="error")
+                st.error(msg)
     else:
-        st.warning("内容不完整")
+        st.warning("请确保所有字段均已填写且已上传图片。")
