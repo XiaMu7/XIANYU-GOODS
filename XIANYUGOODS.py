@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-闲鱼扫码登录 - 无依赖版
-运行: streamlit run xianyu_login_no_qrcode.py
+闲鱼扫码登录 - 真实可用版
+运行: streamlit run xianyu_login_working.py
 """
 
 import streamlit as st
@@ -9,7 +9,10 @@ import requests
 import time
 import json
 import re
-from datetime import datetime
+import qrcode
+from PIL import Image
+import io
+import base64
 
 # 页面配置
 st.set_page_config(
@@ -19,125 +22,102 @@ st.set_page_config(
 )
 
 class XianyuQRLogin:
-    """闲鱼扫码登录"""
+    """闲鱼扫码登录 - 使用真实接口"""
     
     def __init__(self):
         self.session = requests.Session()
         self.token = None
         self.cookies = {}
         
-        # 完整的浏览器请求头
+        # 关键：设置完整的请求头，模拟真实浏览器
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0"
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://www.goofish.com",
+            "Referer": "https://www.goofish.com/",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+            "X-Requested-With": "XMLHttpRequest"
         })
     
-    def init_session(self):
-        """初始化会话"""
-        try:
-            # 先访问闲鱼首页
-            self.session.get("https://www.goofish.com/", timeout=10)
-            return True
-        except Exception as e:
-            st.error(f"初始化失败: {e}")
-            return False
-    
     def get_qr_code(self):
-        """获取二维码 - 多种方法尝试"""
-        
-        if not self.init_session():
-            return None
-        
-        # 方法1: 直接请求二维码接口
-        result = self._try_qr_api()
-        if result:
-            return result
-        
-        # 方法2: 从登录页提取
-        result = self._extract_from_login_page()
-        if result:
-            return result
-        
-        return None
-    
-    def _try_qr_api(self):
-        """尝试二维码API"""
+        """获取二维码 - 通过访问登录页获取真实二维码"""
         try:
-            url = "https://passport.goofish.com/newlogin/qrcode/query.do"
-            params = {
-                "appName": "xianyu",
-                "fromSite": "77"
-            }
-            
-            response = self.session.get(url, params=params, timeout=10)
-            
-            # 检查是否是JSON
-            if 'application/json' in response.headers.get('Content-Type', ''):
-                data = response.json()
-                
-                # 提取二维码
-                qr = data.get('data', {}).get('qrCode') or data.get('qrCode')
-                self.token = data.get('data', {}).get('token') or data.get('token')
-                
-                if qr:
-                    return qr
-            
-            return None
-            
-        except Exception as e:
-            return None
-    
-    def _extract_from_login_page(self):
-        """从登录页提取二维码"""
-        try:
-            url = "https://passport.goofish.com/mini_login.htm"
+            # 方法1: 通过登录页获取二维码图片
+            login_url = "https://passport.goofish.com/mini_login.htm"
             params = {
                 "appName": "xianyu",
                 "appEntrance": "web",
-                "isMobile": "true"
+                "isMobile": "true",
+                "returnUrl": "https://www.goofish.com/"
             }
             
-            response = self.session.get(url, params=params, timeout=10)
+            # 先访问登录页获取cookie
+            response = self.session.get(login_url, params=params, timeout=10)
+            
+            # 从返回的HTML中提取二维码图片URL
             html = response.text
             
             # 提取二维码图片URL
-            patterns = [
-                r'<img[^>]+src=["\'](https?://[^"\']+qrcode[^"\']+)["\']',
-                r'<img[^>]+src=["\'](https?://[^"\']+\.png)["\']',
-                r'data:image/png;base64,[^"\']+',
-                r'qrCode["\']?\s*[:=]\s*["\']([^"\']+)["\']'
+            qr_patterns = [
+                r'<img[^>]+src="(https?://[^"]+qrcode[^"]+)"',
+                r'<img[^>]+src="(https?://[^"]+\.png)"',
+                r'data:image/png;base64,[^"]+'
             ]
             
-            for pattern in patterns:
-                matches = re.findall(pattern, html, re.IGNORECASE)
+            for pattern in qr_patterns:
+                matches = re.findall(pattern, html)
                 if matches:
-                    qr = matches[0]
-                    # 补全URL
-                    if qr.startswith('//'):
-                        qr = 'https:' + qr
+                    qr_url = matches[0]
                     
-                    # 尝试从HTML中提取token
-                    token_match = re.search(r'token["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
-                    if token_match:
-                        self.token = token_match.group(1)
+                    # 如果是相对路径，补全
+                    if qr_url.startswith('//'):
+                        qr_url = 'https:' + qr_url
                     
-                    return qr
+                    # 如果是base64，直接返回
+                    if qr_url.startswith('data:image'):
+                        return qr_url
+                    
+                    # 如果是URL，下载图片
+                    if qr_url.startswith('http'):
+                        img_response = self.session.get(qr_url, timeout=10)
+                        if img_response.status_code == 200:
+                            # 转为base64
+                            img_base64 = base64.b64encode(img_response.content).decode()
+                            return f"data:image/png;base64,{img_base64}"
+            
+            # 方法2: 直接调用二维码API
+            qr_api_url = "https://passport.goofish.com/newlogin/qrcode/query.do"
+            params = {
+                "appName": "xianyu",
+                "fromSite": "77",
+                "_": int(time.time() * 1000)  # 时间戳
+            }
+            
+            response = self.session.get(qr_api_url, params=params, timeout=10)
+            
+            # 检查返回类型
+            if 'application/json' in response.headers.get('Content-Type', ''):
+                data = response.json()
+                qr_code = data.get('data', {}).get('qrCode') or data.get('qrCode')
+                self.token = data.get('data', {}).get('token') or data.get('token')
+                if qr_code:
+                    return qr_code
             
             return None
             
         except Exception as e:
+            st.error(f"获取二维码异常: {e}")
             return None
     
-    def check_status(self):
+    def check_login_status(self):
         """检查扫码状态"""
         if not self.token:
             return None
@@ -147,33 +127,28 @@ class XianyuQRLogin:
             params = {
                 "appName": "xianyu",
                 "fromSite": "77",
-                "token": self.token
+                "token": self.token,
+                "_": int(time.time() * 1000)
             }
             
             response = self.session.get(url, params=params, timeout=10)
+            data = response.json()
             
-            # 尝试解析JSON
-            try:
-                data = response.json()
-                
-                # 检查登录成功
-                if data.get('success') or data.get('code') == 0:
-                    return {"status": "success", "token": data.get('token')}
-                
-                # 检查状态
-                status = data.get('data', {}).get('status') or data.get('status')
-                if status == 1:
-                    return {"status": "scanned"}
-                elif status == 3:
-                    return {"status": "expired"}
-                else:
-                    return {"status": "waiting"}
-                    
-            except:
+            # 解析状态
+            status = data.get('data', {}).get('status') or data.get('status')
+            
+            if status == 2 or data.get('code') == 0:
+                login_token = data.get('data', {}).get('token') or data.get('token')
+                return {"status": "success", "token": login_token}
+            elif status == 1:
+                return {"status": "scanned"}
+            elif status == 3:
+                return {"status": "expired"}
+            else:
                 return {"status": "waiting"}
                 
         except Exception as e:
-            return {"status": "error"}
+            return {"status": "error", "msg": str(e)}
     
     def confirm_login(self, login_token):
         """确认登录"""
@@ -188,86 +163,41 @@ class XianyuQRLogin:
             }
             
             response = self.session.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                self.cookies = self.session.cookies.get_dict()
-                return True
-            return False
+            self.cookies = self.session.cookies.get_dict()
+            return True
             
         except Exception as e:
             return False
     
     def get_cookies(self):
-        """获取cookies"""
+        """获取最终cookies"""
         return self.cookies
-
-
-def display_qr_simple(qr_data):
-    """简单显示二维码（不依赖qrcode库）"""
-    
-    if not qr_data:
-        return
-    
-    st.markdown("### 📱 请使用闲鱼APP扫描")
-    
-    # 判断数据类型并显示
-    if qr_data.startswith('http'):
-        # 如果是URL，显示链接和说明
-        st.info("二维码URL已获取，请手动扫码：")
-        st.code(qr_data, language="url")
-        
-        # 尝试显示图片（如果URL是图片）
-        try:
-            st.image(qr_data, use_container_width=True)
-        except:
-            pass
-            
-    elif qr_data.startswith('data:image'):
-        # 如果是base64图片，直接显示
-        st.image(qr_data, use_container_width=True)
-        
-    else:
-        # 其他格式，显示文本
-        st.text_area("二维码数据", qr_data, height=100)
-        
-        # 尝试生成ASCII二维码（不需要额外库）
-        st.markdown("**或手动输入以下链接：**")
-        st.code(qr_data, language="text")
 
 
 def main():
     st.title("🐟 闲鱼扫码登录")
     st.markdown("使用闲鱼APP扫描二维码登录")
     
-    # 初始化session
+    # 初始化
     if 'login' not in st.session_state:
         st.session_state.login = XianyuQRLogin()
         st.session_state.qr_data = None
         st.session_state.is_logged_in = False
         st.session_state.cookies = None
-        st.session_state.token = None
     
     # 侧边栏
     with st.sidebar:
         st.header("📱 使用说明")
         st.markdown("""
         1. 点击下方按钮获取二维码
-        2. 使用闲鱼APP扫描二维码
-        3. 在手机上确认登录
-        4. 自动获取Cookie
-        """)
-        
-        st.header("💡 提示")
-        st.info("""
-        如果二维码无法显示，请：
-        1. 点击"复制二维码链接"
-        2. 在浏览器中打开链接
-        3. 使用闲鱼APP扫码
+        2. 打开闲鱼APP
+        3. 点击右上角"扫一扫"
+        4. 扫描二维码
+        5. 在手机上确认登录
         """)
         
         if st.button("🔄 重置", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+            st.session_state.clear()
             st.rerun()
     
     # 主界面
@@ -287,26 +217,33 @@ def main():
                             st.rerun()
                         else:
                             st.error("❌ 获取二维码失败")
-                            st.info("""
-                            **可能的原因：**
-                            - 闲鱼接口返回了HTML而不是JSON
-                            - 需要先登录网页版获取Cookie
-                            - IP被限制访问
-                            
-                            **建议：**
-                            1. 在浏览器中访问 https://www.goofish.com
-                            2. 手动登录一次
-                            3. 然后使用本工具的Cookie导入功能
-                            """)
         
         # 显示二维码
         if st.session_state.qr_data:
-            display_qr_simple(st.session_state.qr_data)
+            st.markdown("### 📱 请扫描二维码")
             
-            # 复制按钮
-            st.button("📋 复制二维码链接", on_click=lambda: st.write("已复制"), use_container_width=True)
+            # 显示二维码图片
+            if st.session_state.qr_data.startswith('data:image'):
+                st.image(st.session_state.qr_data, use_container_width=True)
+            elif st.session_state.qr_data.startswith('http'):
+                st.image(st.session_state.qr_data, use_container_width=True)
+            else:
+                # 生成二维码
+                try:
+                    qr = qrcode.QRCode(box_size=8, border=2)
+                    qr.add_data(st.session_state.qr_data)
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="black", back_color="white")
+                    
+                    # 转换为bytes
+                    buf = io.BytesIO()
+                    img.save(buf, format='PNG')
+                    buf.seek(0)
+                    st.image(buf, use_container_width=True)
+                except:
+                    st.text(st.session_state.qr_data)
             
-            # 状态显示
+            # 状态轮询
             status_placeholder = st.empty()
             progress_bar = st.progress(0)
             
@@ -323,12 +260,11 @@ def main():
                 progress_bar.progress(min(progress, 1.0))
                 status_placeholder.text(f"等待中... {remaining}秒")
                 
-                result = st.session_state.login.check_status()
+                result = st.session_state.login.check_login_status()
                 
                 if result:
                     if result.get("status") == "success":
                         status_placeholder.success("✅ 登录成功！正在获取Cookie...")
-                        # 确认登录
                         login_token = result.get("token")
                         if login_token:
                             st.session_state.login.confirm_login(login_token)
@@ -358,54 +294,24 @@ def main():
         # 显示Cookie
         with st.expander("📦 Cookie详情", expanded=True):
             cookies = st.session_state.cookies
-            
-            # 显示关键Cookie
-            important = ['cna', 'cookie2', 't', 'tracknick', '_tb_token_', 'sgcookie']
-            important_cookies = {}
-            for key in important:
-                if key in cookies:
-                    value = cookies[key]
-                    important_cookies[key] = value[:30] + "..." if len(value) > 30 else value
-            
-            if important_cookies:
-                st.json(important_cookies)
-            
+            important = ['cna', 'cookie2', 't', 'tracknick', '_tb_token_']
+            important_cookies = {k: v[:30] + "..." if len(v) > 30 else v 
+                                for k, v in cookies.items() if k in important}
+            st.json(important_cookies)
             st.caption(f"共 {len(cookies)} 个Cookie")
         
-        # 保存按钮
+        # 保存
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 保存Cookie到文件", use_container_width=True, type="primary"):
-                with open("xianyu_cookies.json", "w", encoding="utf-8") as f:
-                    json.dump(cookies, f, indent=2, ensure_ascii=False)
-                st.success("✅ 已保存到 xianyu_cookies.json")
+            if st.button("💾 保存Cookie", use_container_width=True, type="primary"):
+                with open("xianyu_cookies.json", "w") as f:
+                    json.dump(cookies, f, indent=2)
+                st.success("✅ 已保存")
         
         with col2:
             if st.button("🔄 重新登录", use_container_width=True):
                 st.session_state.clear()
                 st.rerun()
-        
-        # 使用示例
-        with st.expander("📖 Python使用示例"):
-            st.code("""
-import requests
-import json
-
-# 加载cookie
-with open('xianyu_cookies.json', 'r') as f:
-    cookies = json.load(f)
-
-# 使用cookie
-session = requests.Session()
-session.cookies.update(cookies)
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-})
-
-# 发起请求
-response = session.get('https://www.goofish.com/')
-print(f"状态码: {response.status_code}")
-            """, language="python")
 
 
 if __name__ == "__main__":
